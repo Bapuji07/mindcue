@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16
+    container_name: second-memory-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-second_memory}
+      POSTGRES_USER: ${DB_USERNAME:-memory}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-memory}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - second_memory_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-memory} -d ${DB_NAME:-second_memory}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  second_memory_pgdata:

@@ -1,0 +1,14 @@
+.env
+backend/src/main/resources/application.yml
+.idea/
+.vscode/
+*.iml
+backend/target/
+android/.gradle/
+android/local.properties
+android/app/build/
+data/
+audio.mp4
+test-audio.*
+*.log
+.DS_Store

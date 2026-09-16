@@ -1,6 +1,8 @@
 package com.secondmemory.memory;
 
 import com.secondmemory.ai.dto.ExtractedMemoryResponse;
+import com.secondmemory.common.NotFoundException;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -30,6 +32,16 @@ public class MemoryController {
     @PostMapping("/ask")
     public AskMemoryResponse ask(@jakarta.validation.Valid @RequestBody AskMemoryRequest request) {
         return answerService.ask(request);
+    }
+
+    @PatchMapping("/memories/{id}")
+    public MemoryRecord update(@PathVariable UUID id,
+                               @RequestParam UUID userId,
+                               @Valid @RequestBody UpdateMemoryRequest request) {
+        repository.findByIdAndUser(id, userId)
+                .orElseThrow(() -> new NotFoundException("Memory not found: " + id));
+        repository.update(id, userId, request);
+        return repository.findByIdAndUser(id, userId).orElseThrow();
     }
 
     @PostMapping("/sessions/{sessionId}/extract")

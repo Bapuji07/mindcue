@@ -5,6 +5,8 @@ import com.secondmemory.android.data.AskSource
 import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.ResultJson
 import com.secondmemory.android.data.SessionResult
+import com.secondmemory.android.data.ConversationDetail
+import com.secondmemory.android.data.ConversationSession
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -84,6 +86,58 @@ class BackendClient(baseUrl: String) {
         }
         return AskResult(json.optString("answer"), sources)
     }
+
+    fun listSessions(userId: String): List<ConversationSession> {
+        val array = request("GET", "api/v1/memory/sessions?userId=$userId&limit=100").getJSONArray("sessions")
+        return List(array.length()) { sessionFromJson(array.getJSONObject(it)) }
+    }
+
+    fun sessionDetail(userId: String, sessionId: String): ConversationDetail {
+        val json = request("GET", "api/v1/memory/sessions/$sessionId/detail?userId=$userId")
+        val memoriesJson = json.getJSONArray("memories")
+        val chunks = json.getJSONArray("transcriptChunks")
+        val transcript = buildString {
+            repeat(chunks.length()) { index ->
+                val chunk = chunks.getJSONObject(index)
+                if (isNotEmpty()) append("\n\n")
+                chunk.optString("speakerLabel").takeIf { it.isNotBlank() }?.let { append(it).append(": ") }
+                append(chunk.optString("text"))
+            }
+        }
+        return ConversationDetail(
+            session = sessionFromJson(json.getJSONObject("session")),
+            memories = List(memoriesJson.length()) { ResultJson.memoryFromJson(memoriesJson.getJSONObject(it)) },
+            transcript = transcript
+        )
+    }
+
+    fun renameSession(userId: String, sessionId: String, title: String): ConversationSession {
+        val body = JSONObject().put("title", title)
+        return sessionFromJson(request("PATCH", "api/v1/memory/sessions/$sessionId?userId=$userId", body))
+    }
+
+    fun deleteSession(userId: String, sessionId: String) {
+        request("DELETE", "api/v1/memory/sessions/$sessionId?userId=$userId")
+    }
+
+    fun updateMemory(userId: String, memoryId: String, status: String? = null, active: Boolean? = null): MemoryItem {
+        val body = JSONObject().apply {
+            status?.let { put("resolutionStatus", it) }
+            active?.let { put("active", it) }
+        }
+        return ResultJson.memoryFromJson(
+            request("PATCH", "api/v1/memory/memories/$memoryId?userId=$userId", body)
+        )
+    }
+
+    private fun sessionFromJson(json: JSONObject) = ConversationSession(
+        id = json.getString("id"),
+        title = json.optString("title").ifBlank { "Untitled conversation" },
+        status = json.optString("status"),
+        startedAt = json.optString("startedAt"),
+        durationSeconds = if (json.isNull("durationSeconds")) null else json.optInt("durationSeconds"),
+        summary = if (json.isNull("summary")) null else json.optString("summary").takeIf { it.isNotBlank() }
+    )
 
     private fun request(method: String, path: String, body: JSONObject? = null): JSONObject {
         val connection = connection(path).apply {

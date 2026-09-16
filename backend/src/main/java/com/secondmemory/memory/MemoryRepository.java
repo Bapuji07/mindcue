@@ -6,6 +6,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -80,6 +81,39 @@ public class MemoryRepository {
         ), userId, limit);
     }
 
+    public List<MemoryRecord> listBySession(UUID sessionId, UUID userId) {
+        return jdbc.query("""
+                SELECT * FROM memory
+                WHERE session_id = ? AND user_id = ? AND is_active = TRUE
+                ORDER BY created_at
+                """, (rs, rowNum) -> mapRow(rs), sessionId, userId);
+    }
+
+    public Optional<MemoryRecord> findByIdAndUser(UUID id, UUID userId) {
+        return jdbc.query("SELECT * FROM memory WHERE id = ? AND user_id = ?", (rs, rowNum) -> mapRow(rs), id, userId)
+                .stream().findFirst();
+    }
+
+    public void update(UUID id, UUID userId, UpdateMemoryRequest request) {
+        MemoryRecord current = findByIdAndUser(id, userId).orElseThrow();
+        String title = request.title() == null ? current.title() : request.title().trim();
+        String content = request.content() == null ? current.content() : request.content().trim();
+        ResolutionStatus status = request.resolutionStatus() == null
+                ? current.resolutionStatus() : request.resolutionStatus();
+        boolean active = request.active() == null ? current.active() : request.active();
+        if (title.isBlank()) throw new IllegalArgumentException("Memory title must not be blank");
+        if (content.isBlank()) throw new IllegalArgumentException("Memory content must not be blank");
+        jdbc.update("""
+                UPDATE memory
+                SET title = ?, content = ?, resolution_status = ?, is_active = ?, updated_at = NOW()
+                WHERE id = ? AND user_id = ?
+                """, title, content, status.name(), active, id, userId);
+    }
+
+    public void deleteBySession(UUID sessionId, UUID userId) {
+        jdbc.update("DELETE FROM memory WHERE session_id = ? AND user_id = ?", sessionId, userId);
+    }
+
 
     public void updateEmbedding(UUID memoryId, float[] embedding) {
         jdbc.update("UPDATE memory SET embedding = CAST(? AS vector), updated_at = NOW() WHERE id = ?",
@@ -149,5 +183,27 @@ public class MemoryRepository {
 
     private static Instant timestamp(Timestamp value) {
         return value == null ? null : value.toInstant();
+    }
+
+    private MemoryRecord mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new MemoryRecord(
+                rs.getObject("id", UUID.class),
+                rs.getObject("user_id", UUID.class),
+                rs.getObject("session_id", UUID.class),
+                MemoryType.valueOf(rs.getString("type")),
+                rs.getString("title"),
+                rs.getString("content"),
+                rs.getBigDecimal("importance"),
+                rs.getBigDecimal("confidence"),
+                ResolutionStatus.valueOf(rs.getString("resolution_status")),
+                timestamp(rs.getTimestamp("occurred_at")),
+                timestamp(rs.getTimestamp("due_at")),
+                rs.getString("ai_provider"),
+                rs.getString("ai_model"),
+                rs.getString("prompt_version"),
+                rs.getBoolean("is_active"),
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("updated_at").toInstant()
+        );
     }
 }

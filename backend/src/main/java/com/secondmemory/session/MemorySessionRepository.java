@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 @Repository
@@ -39,6 +40,29 @@ public class MemorySessionRepository {
     public Optional<MemorySession> findById(UUID id) {
         return jdbc.query("SELECT * FROM memory_session WHERE id = ?", this::mapRow, id)
                 .stream().findFirst();
+    }
+
+    public Optional<MemorySession> findByIdAndUser(UUID id, UUID userId) {
+        return jdbc.query("SELECT * FROM memory_session WHERE id = ? AND user_id = ?", this::mapRow, id, userId)
+                .stream().findFirst();
+    }
+
+    public List<MemorySession> listByUser(UUID userId, int limit) {
+        return jdbc.query("""
+                SELECT * FROM memory_session
+                WHERE user_id = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """, this::mapRow, userId, limit);
+    }
+
+    public void updateTitle(UUID id, UUID userId, String title) {
+        jdbc.update("UPDATE memory_session SET title = ?, updated_at = NOW() WHERE id = ? AND user_id = ?",
+                title, id, userId);
+    }
+
+    public void delete(UUID id, UUID userId) {
+        jdbc.update("DELETE FROM memory_session WHERE id = ? AND user_id = ?", id, userId);
     }
 
     public void markAudioReceived(UUID id, String audioUri) {

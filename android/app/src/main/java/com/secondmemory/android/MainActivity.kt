@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,6 +30,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.secondmemory.android.data.MemoryItem
+import com.secondmemory.android.data.HistoryUiState
+import com.secondmemory.android.data.ConversationSession
 import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryUiState
 import java.util.Locale
@@ -69,6 +72,7 @@ private fun SecondMemoryTheme(content: @Composable () -> Unit) {
 private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val backendUrl by vm.backendUrl.collectAsStateWithLifecycle()
+    val history by vm.history.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pageName by rememberSaveable { mutableStateOf(AppPage.HOME.name) }
     var permissionError by remember { mutableStateOf<String?>(null) }
@@ -129,7 +133,11 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                 { state.lastAudioPath?.let { vm.retry(context, it) } },
                 { pageName = AppPage.MEMORIES.name }
             )
-            page == AppPage.MEMORIES -> MemoriesScreen(Modifier.padding(padding), state, vm::ask)
+            page == AppPage.MEMORIES -> MemoriesScreen(
+                Modifier.padding(padding), state, history, vm::ask, vm::loadHistory,
+                vm::openConversation, vm::closeConversation, vm::renameConversation,
+                vm::deleteConversation, vm::completeMemory, vm::dismissMemory
+            )
             else -> SettingsScreen(
                 Modifier.padding(padding), state, backendUrl, vm::updateBackendUrl, vm::saveAndTestBackend
             )
@@ -253,36 +261,166 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
 }
 
 @Composable
-private fun MemoriesScreen(modifier: Modifier, state: MemoryUiState, onAsk: (String) -> Unit) {
-    var transcriptVisible by rememberSaveable { mutableStateOf(false) }
+private fun MemoriesScreen(
+    modifier: Modifier,
+    state: MemoryUiState,
+    history: HistoryUiState,
+    onAsk: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onOpen: (String) -> Unit,
+    onClose: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onCompleteMemory: (String) -> Unit,
+    onDismissMemory: (String) -> Unit
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    history.selected?.let {
+        ConversationDetailScreen(
+            modifier, history, onClose, onRename, onDelete, onCompleteMemory, onDismissMemory
+        )
+        return
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item { Spacer(Modifier.height(4.dp)) }
         item { AskMemoryCard(state, onAsk) }
-        state.result?.let { result ->
-            item {
-                SectionTitle("Latest conversation")
-                Spacer(Modifier.height(8.dp))
-                SurfaceCard { Text(result.summary.ifBlank { "No summary was generated." }) }
+        item { SectionTitle("Conversation history", history.sessions.size.toString()) }
+        if (history.loading && history.sessions.isEmpty()) {
+            item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+        }
+        history.error?.let { item { InlineMessage(it, ErrorRed) } }
+        if (!history.loading && history.sessions.isEmpty()) {
+            item { EmptyCard("Your processed conversations will appear here after you deactivate Memory.") }
+        } else {
+            items(history.sessions, key = { it.id }) { session -> ConversationCard(session) { onOpen(session.id) } }
+        }
+        item { Spacer(Modifier.height(20.dp)) }
+    }
+}
+
+@Composable
+private fun ConversationCard(session: ConversationSession, onClick: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    session.title, fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    session.status.lowercase().replaceFirstChar { it.uppercase() }, color = Evergreen,
+                    style = MaterialTheme.typography.labelMedium
+                )
             }
-            item { SectionTitle("Extracted memories", result.memories.size.toString()) }
-            if (result.memories.isEmpty()) {
-                item { EmptyCard("No durable memories were found in this recording.") }
-            } else {
-                items(result.memories) { MemoryCard(it) }
+            Spacer(Modifier.height(7.dp))
+            Text(formatDate(session.startedAt), color = Muted, style = MaterialTheme.typography.bodySmall)
+            session.summary?.let {
+                Spacer(Modifier.height(9.dp))
+                Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            item {
-                OutlinedButton(
-                    onClick = { transcriptVisible = !transcriptVisible }, modifier = Modifier.fillMaxWidth()
-                ) { Text(if (transcriptVisible) "Hide transcript" else "Show transcript") }
+        }
+    }
+}
+
+@Composable
+private fun ConversationDetailScreen(
+    modifier: Modifier,
+    history: HistoryUiState,
+    onBack: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onCompleteMemory: (String) -> Unit,
+    onDismissMemory: (String) -> Unit
+) {
+    val detail = history.selected ?: return
+    var title by rememberSaveable(detail.session.id) { mutableStateOf(detail.session.title) }
+    var editingTitle by rememberSaveable(detail.session.id) { mutableStateOf(false) }
+    var transcriptVisible by rememberSaveable(detail.session.id) { mutableStateOf(false) }
+    var confirmDelete by rememberSaveable(detail.session.id) { mutableStateOf(false) }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete conversation?") },
+            text = { Text("This permanently removes its transcript, memories, and stored recording.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete", color = ErrorRed) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
+        )
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item { TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) { Text("‹ Back to conversations") } }
+        item {
+            SurfaceCard {
+                if (editingTitle) {
+                    OutlinedTextField(
+                        value = title, onValueChange = { title = it }, label = { Text("Conversation title") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onRename(title); editingTitle = false },
+                            enabled = title.isNotBlank() && !history.mutating
+                        ) { Text("Save") }
+                        TextButton(onClick = { title = detail.session.title; editingTitle = false }) { Text("Cancel") }
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(
+                            detail.session.title, style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { editingTitle = true }) { Text("Rename") }
+                    }
+                    Text(formatDate(detail.session.startedAt), color = Muted)
+                }
             }
-            if (transcriptVisible) {
-                item { SurfaceCard { Text(result.transcript.ifBlank { "No transcript returned." }) } }
+        }
+        history.error?.let { item { InlineMessage(it, ErrorRed) } }
+        if (history.mutating) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        item {
+            SectionTitle("Summary")
+            Spacer(Modifier.height(8.dp))
+            SurfaceCard { Text(detail.session.summary ?: "No summary was generated.") }
+        }
+        item { SectionTitle("Memories", detail.memories.size.toString()) }
+        if (detail.memories.isEmpty()) {
+            item { EmptyCard("No active memories remain in this conversation.") }
+        } else {
+            items(detail.memories, key = { it.id ?: "${it.type}-${it.title}" }) { memory ->
+                MemoryCard(
+                    memory,
+                    onDone = memory.id?.takeIf { memory.resolutionStatus == "OPEN" }?.let { id -> { onCompleteMemory(id) } },
+                    onDismiss = memory.id?.let { id -> { onDismissMemory(id) } }
+                )
             }
-        } ?: item {
-            EmptyCard("Your processed conversations will appear here after you deactivate Memory.")
+        }
+        item {
+            OutlinedButton(onClick = { transcriptVisible = !transcriptVisible }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (transcriptVisible) "Hide transcript" else "Show transcript")
+            }
+        }
+        if (transcriptVisible) {
+            item { SurfaceCard { Text(detail.transcript.ifBlank { "No transcript returned." }) } }
+        }
+        item {
+            TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Delete conversation", color = ErrorRed)
+            }
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
@@ -303,9 +441,9 @@ private fun SettingsScreen(
         item {
             Spacer(Modifier.height(4.dp))
             SurfaceCard {
-                Text("Laptop connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Backend connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
-                Text("Your phone and laptop need to be on the same network.", color = Muted)
+                Text("Connect this app to your MindCue server.", color = Muted)
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = backendUrl, onValueChange = onUrlChange, label = { Text("Backend URL") },
@@ -347,7 +485,7 @@ private fun EmptyCard(message: String) {
 }
 
 @Composable
-private fun MemoryCard(memory: MemoryItem) {
+private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismiss: (() -> Unit)? = null) {
     SurfaceCard {
         Text(memory.type, color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(7.dp))
@@ -361,6 +499,13 @@ private fun MemoryCard(memory: MemoryItem) {
                 memory.confidence?.let {
                     Text("${String.format(Locale.US, "%.0f", it * 100)}% confidence", style = MaterialTheme.typography.labelMedium)
                 }
+            }
+        }
+        if (onDone != null || onDismiss != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                onDone?.let { OutlinedButton(onClick = it) { Text("Mark done") } }
+                onDismiss?.let { TextButton(onClick = it) { Text("Dismiss") } }
             }
         }
     }
@@ -421,3 +566,5 @@ private fun InlineMessage(message: String, color: Color) {
 
 private fun formatDuration(seconds: Long): String =
     "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
+
+private fun formatDate(value: String): String = value.replace('T', ' ').take(16).ifBlank { "Unknown date" }

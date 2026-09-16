@@ -3,12 +3,14 @@ package com.secondmemory.session;
 import com.secondmemory.audio.AudioStorageService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -34,6 +36,30 @@ public class MemorySessionController {
     @GetMapping("/{id}")
     public MemorySession get(@PathVariable UUID id) {
         return sessions.get(id);
+    }
+
+    @GetMapping
+    public Map<String, List<MemorySession>> list(@RequestParam UUID userId,
+                                                 @RequestParam(defaultValue = "50") int limit) {
+        return Map.of("sessions", sessions.list(userId, limit));
+    }
+
+    @GetMapping("/{id}/detail")
+    public MemorySessionDetail detail(@PathVariable UUID id, @RequestParam UUID userId) {
+        return sessions.detail(id, userId);
+    }
+
+    @PatchMapping("/{id}")
+    public MemorySession rename(@PathVariable UUID id,
+                                @RequestParam UUID userId,
+                                @Valid @RequestBody RenameSessionRequest request) {
+        return sessions.rename(id, userId, request.title());
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable UUID id, @RequestParam UUID userId) throws IOException {
+        sessions.delete(id, userId);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping(value = "/{id}/audio", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

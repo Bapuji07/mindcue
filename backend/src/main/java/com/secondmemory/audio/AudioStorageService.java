@@ -34,4 +34,13 @@ public class AudioStorageService {
         Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
         return destination.toString();
     }
+
+    public void delete(String audioUri) throws IOException {
+        if (audioUri == null || audioUri.isBlank()) return;
+        Path target = Path.of(audioUri).toAbsolutePath().normalize();
+        if (!target.startsWith(audioDirectory)) {
+            throw new IllegalArgumentException("Audio path is outside the configured storage directory");
+        }
+        Files.deleteIfExists(target);
+    }
 }

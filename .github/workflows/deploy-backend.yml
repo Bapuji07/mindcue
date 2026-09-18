@@ -1,0 +1,64 @@
+name: Deploy backend to EC2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build and test
+        working-directory: backend
+        run: ./mvnw -B package
+
+      - name: Stage jar for deploy
+        run: cp backend/target/second-memory-backend-*.jar app.jar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: app.jar
+          retention-days: 5
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, mindcue]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-jar
+
+      - name: Deploy with health-check rollback
+        run: |
+          set -e
+          sudo cp /opt/mindcue/app.jar /opt/mindcue/app.jar.previous
+          sudo cp app.jar /opt/mindcue/app.jar
+          sudo chown mindcue:mindcue /opt/mindcue/app.jar
+          sudo systemctl restart mindcue.service
+
+          for i in $(seq 1 15); do
+            sleep 2
+            if curl -sf http://localhost:8081/api/v1/health > /dev/null; then
+              echo "Health check passed"
+              exit 0
+            fi
+          done
+
+          echo "Health check failed after deploy - rolling back to previous jar"
+          sudo cp /opt/mindcue/app.jar.previous /opt/mindcue/app.jar
+          sudo chown mindcue:mindcue /opt/mindcue/app.jar
+          sudo systemctl restart mindcue.service
+          exit 1

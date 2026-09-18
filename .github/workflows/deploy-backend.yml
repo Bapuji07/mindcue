@@ -44,13 +44,17 @@ jobs:
       - name: Deploy with health-check rollback
         run: |
           set -e
+          # Stop first, then swap the jar, then start - swapping a live jar with `cp` while the
+          # old process still has it open truncates the file out from under it mid-shutdown and
+          # causes flaky restarts.
+          sudo systemctl stop mindcue.service
           sudo cp /opt/mindcue/app.jar /opt/mindcue/app.jar.previous
           sudo cp app.jar /opt/mindcue/app.jar
           sudo chown mindcue:mindcue /opt/mindcue/app.jar
-          sudo systemctl restart mindcue.service
+          sudo systemctl start mindcue.service
 
-          for i in $(seq 1 15); do
-            sleep 2
+          for i in $(seq 1 20); do
+            sleep 3
             if curl -sf http://localhost:8081/api/v1/health > /dev/null; then
               echo "Health check passed"
               exit 0
@@ -58,7 +62,8 @@ jobs:
           done
 
           echo "Health check failed after deploy - rolling back to previous jar"
+          sudo systemctl stop mindcue.service
           sudo cp /opt/mindcue/app.jar.previous /opt/mindcue/app.jar
           sudo chown mindcue:mindcue /opt/mindcue/app.jar
-          sudo systemctl restart mindcue.service
+          sudo systemctl start mindcue.service
           exit 1

@@ -73,7 +73,11 @@ public class AudioStorageService {
     public Path forRead(String audioUri) throws IOException {
         if (isS3Uri(audioUri)) {
             String key = keyOf(audioUri);
-            Path tmp = Files.createTempFile("audio-read-", extensionOf(key));
+            // getObject(request, Path) creates the file itself (CREATE_NEW) and fails if it
+            // already exists, so build a unique path in the temp dir without pre-creating it -
+            // unlike Files.createTempFile, which would create it and cause exactly that failure.
+            Path tmp = Path.of(System.getProperty("java.io.tmpdir"))
+                    .resolve("audio-read-" + UUID.randomUUID() + extensionOf(key));
             s3Client.getObject(GetObjectRequest.builder().bucket(bucket).key(key).build(), tmp);
             return tmp;
         }

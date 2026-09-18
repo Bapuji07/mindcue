@@ -16,15 +16,20 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
+import com.secondmemory.android.BuildConfig
 import com.secondmemory.android.MainActivity
 import com.secondmemory.android.R
 import com.secondmemory.android.data.AppSettings
+import com.secondmemory.android.data.SessionResult
+import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
+import com.secondmemory.android.network.BackendException
 import com.secondmemory.android.state.MemoryState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.OffsetDateTime
@@ -116,12 +121,14 @@ class MemoryRecordingService : Service() {
         MemoryState.processing("Preparing upload…", file.absolutePath)
         scope.launch {
             try {
-                val client = BackendClient(AppSettings.backendUrl(this@MemoryRecordingService))
+                val client = BackendClient(
+                    BuildConfig.DEFAULT_BACKEND_URL,
+                    AppSettings.authToken(this@MemoryRecordingService)
+                )
                 client.health()
-                val userId = AppSettings.userId(this@MemoryRecordingService)
                 var sessionId = AppSettings.pendingSession(this@MemoryRecordingService, file.absolutePath)
                 if (sessionId == null) {
-                    sessionId = client.createSession(userId, startedAt.ifBlank { OffsetDateTime.now().toString() })
+                    sessionId = client.createSession(startedAt.ifBlank { OffsetDateTime.now().toString() })
                     AppSettings.savePendingSession(this@MemoryRecordingService, file.absolutePath, sessionId)
                 }
                 if (!AppSettings.pendingUploaded(this@MemoryRecordingService)) {
@@ -132,11 +139,16 @@ class MemoryRecordingService : Service() {
                 }
                 MemoryState.processing("Transcribing and extracting memories…", file.absolutePath)
                 updateNotification("Processing memory", "Transcribing and extracting memories…")
-                val result = client.process(sessionId)
+                client.startProcessing(sessionId)
+                val result = pollUntilDone(client, sessionId, file)
                 AppSettings.saveLastResult(this@MemoryRecordingService, result)
                 AppSettings.clearPending(this@MemoryRecordingService)
                 MemoryState.ready(result, file.absolutePath)
                 finalNotification("Memory ready", "${result.memories.size} memories extracted")
+            } catch (ex: AuthException) {
+                AppSettings.clearSession(this@MemoryRecordingService)
+                MemoryState.failure("Your session expired. Open the app to sign in again.", file.absolutePath)
+                finalNotification("Sign-in needed", "Open the app to sign in again")
             } catch (ex: Exception) {
                 MemoryState.failure(ex.message ?: "Processing failed", file.absolutePath)
                 finalNotification("Memory needs attention", "Open the app to retry")
@@ -146,6 +158,38 @@ class MemoryRecordingService : Service() {
                 stopSelf()
             }
         }
+    }
+
+    private suspend fun pollUntilDone(client: BackendClient, sessionId: String, file: File): SessionResult {
+        val deadline = SystemClock.elapsedRealtime() + POLL_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val detail = client.sessionDetail(sessionId)
+            val status = detail.session.status
+            when (status) {
+                "COMPLETED" -> return SessionResult(
+                    sessionId = sessionId,
+                    transcript = detail.transcript,
+                    summary = detail.session.summary.orEmpty(),
+                    memories = detail.memories
+                )
+                "FAILED" -> throw BackendException(detail.session.errorMessage ?: "Processing failed")
+                else -> {
+                    val label = statusLabel(status)
+                    MemoryState.processing(label, file.absolutePath)
+                    updateNotification("Processing memory", label)
+                }
+            }
+            delay(POLL_INTERVAL_MS)
+        }
+        throw BackendException("Processing is taking longer than expected. Check back in the app shortly.")
+    }
+
+    private fun statusLabel(status: String): String = when (status) {
+        "AUDIO_RECEIVED" -> "Preparing…"
+        "TRANSCRIBING" -> "Transcribing your recording…"
+        "TRANSCRIPTION_COMPLETE" -> "Transcription complete, extracting memories…"
+        "PROCESSING" -> "Extracting memories…"
+        else -> "Transcribing and extracting memories…"
     }
 
     private fun createChannel() {
@@ -195,6 +239,8 @@ class MemoryRecordingService : Service() {
         private const val ACTION_DEACTIVATE = "com.secondmemory.DEACTIVATE"
         private const val ACTION_RETRY = "com.secondmemory.RETRY"
         private const val EXTRA_AUDIO_PATH = "audio_path"
+        private const val POLL_INTERVAL_MS = 4_000L
+        private const val POLL_TIMEOUT_MS = 15 * 60 * 1_000L
 
         fun activate(context: Context) = ContextCompat.startForegroundService(context,
             Intent(context, MemoryRecordingService::class.java).setAction(ACTION_ACTIVATE))

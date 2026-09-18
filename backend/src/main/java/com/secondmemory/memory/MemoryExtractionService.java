@@ -45,8 +45,8 @@ public class MemoryExtractionService {
         this.sessionRepository = sessionRepository;
     }
 
-    public ExtractedMemoryResponse extract(UUID sessionId) {
-        MemorySession session = sessions.get(sessionId);
+    public ExtractedMemoryResponse extract(UUID sessionId, UUID userId) {
+        MemorySession session = sessions.get(sessionId, userId);
         List<TranscriptChunk> chunks = transcripts.findBySession(sessionId);
         if (chunks.isEmpty()) {
             throw new IllegalArgumentException("No transcript chunks exist for session " + sessionId);

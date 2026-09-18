@@ -15,6 +15,7 @@ public record MemorySession(
         String audioUri,
         Integer durationSeconds,
         String summary,
+        String errorMessage,
         Instant createdAt,
         Instant updatedAt
 ) {}

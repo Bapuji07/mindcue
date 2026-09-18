@@ -19,7 +19,7 @@ public class MemorySessionRepository {
         this.jdbc = jdbc;
     }
 
-    public MemorySession create(CreateSessionRequest request) {
+    public MemorySession create(UUID userId, CreateSessionRequest request) {
         UUID id = UUID.randomUUID();
         String source = request.source() == null || request.source().isBlank() ? "ANDROID" : request.source();
         jdbc.update("""
@@ -28,7 +28,7 @@ public class MemorySessionRepository {
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 id,
-                request.userId(),
+                userId,
                 request.title(),
                 SessionStatus.RECORDING.name(),
                 source,
@@ -85,6 +85,10 @@ public class MemorySessionRepository {
                 id);
     }
 
+    public void clearAudioUri(UUID id) {
+        jdbc.update("UPDATE memory_session SET audio_uri = NULL, updated_at = NOW() WHERE id = ?", id);
+    }
+
     public void updateStatus(UUID id, SessionStatus status) {
         jdbc.update("UPDATE memory_session SET status = ?, updated_at = NOW() WHERE id = ?",
                 status.name(), id);
@@ -93,9 +97,17 @@ public class MemorySessionRepository {
     public void updateSummary(UUID id, String summary, SessionStatus status) {
         jdbc.update("""
                 UPDATE memory_session
-                SET summary = ?, status = ?, updated_at = NOW()
+                SET summary = ?, status = ?, error_message = NULL, updated_at = NOW()
                 WHERE id = ?
                 """, summary, status.name(), id);
+    }
+
+    public void markFailed(UUID id, String errorMessage) {
+        jdbc.update("""
+                UPDATE memory_session
+                SET status = ?, error_message = ?, updated_at = NOW()
+                WHERE id = ?
+                """, SessionStatus.FAILED.name(), errorMessage, id);
     }
 
     private MemorySession mapRow(ResultSet rs, int rowNum) throws SQLException {
@@ -111,6 +123,7 @@ public class MemorySessionRepository {
                 rs.getString("audio_uri"),
                 (Integer) rs.getObject("duration_seconds"),
                 rs.getString("summary"),
+                rs.getString("error_message"),
                 instant(rs, "created_at"),
                 instant(rs, "updated_at")
         );

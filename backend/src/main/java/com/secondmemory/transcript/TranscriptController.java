@@ -1,7 +1,9 @@
 package com.secondmemory.transcript;
 
+import com.secondmemory.auth.CurrentUser;
 import com.secondmemory.session.MemorySessionService;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -20,14 +22,15 @@ public class TranscriptController {
 
     @PostMapping
     public TranscriptChunk create(@PathVariable UUID sessionId,
-                                  @Valid @RequestBody CreateTranscriptChunkRequest request) {
-        sessions.get(sessionId);
+                                  @Valid @RequestBody CreateTranscriptChunkRequest request,
+                                  Authentication auth) {
+        sessions.get(sessionId, CurrentUser.id(auth));
         return repository.create(sessionId, request);
     }
 
     @GetMapping
-    public List<TranscriptChunk> list(@PathVariable UUID sessionId) {
-        sessions.get(sessionId);
+    public List<TranscriptChunk> list(@PathVariable UUID sessionId, Authentication auth) {
+        sessions.get(sessionId, CurrentUser.id(auth));
         return repository.findBySession(sessionId);
     }
 }

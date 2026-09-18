@@ -4,6 +4,7 @@ import com.secondmemory.ai.AiProviderRegistry;
 import com.secondmemory.ai.TranscriptionProvider;
 import com.secondmemory.ai.dto.TranscriptionResult;
 import com.secondmemory.ai.dto.TranscriptionSegment;
+import com.secondmemory.audio.AudioStorageService;
 import com.secondmemory.config.AiProperties;
 import com.secondmemory.session.MemorySession;
 import com.secondmemory.session.MemorySessionRepository;
@@ -14,7 +15,7 @@ import com.secondmemory.transcript.TranscriptChunk;
 import com.secondmemory.transcript.TranscriptRepository;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Files;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,33 +28,39 @@ public class TranscriptionService {
     private final MemorySessionService sessions;
     private final MemorySessionRepository sessionRepository;
     private final TranscriptRepository transcripts;
+    private final AudioStorageService audioStorage;
 
     public TranscriptionService(AiProviderRegistry providers,
                                 AiProperties aiProperties,
                                 MemorySessionService sessions,
                                 MemorySessionRepository sessionRepository,
-                                TranscriptRepository transcripts) {
+                                TranscriptRepository transcripts,
+                                AudioStorageService audioStorage) {
         this.providers = providers;
         this.aiProperties = aiProperties;
         this.sessions = sessions;
         this.sessionRepository = sessionRepository;
         this.transcripts = transcripts;
+        this.audioStorage = audioStorage;
     }
 
-    public TranscriptionResponse transcribe(UUID sessionId) {
-        MemorySession session = sessions.get(sessionId);
+    public TranscriptionResponse transcribe(UUID sessionId, UUID userId) {
+        MemorySession session = sessions.get(sessionId, userId);
         if (session.audioUri() == null || session.audioUri().isBlank()) {
             throw new IllegalArgumentException("No audio has been uploaded for session " + sessionId);
-        }
-
-        Path audioPath = Path.of(session.audioUri()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(audioPath)) {
-            throw new IllegalArgumentException("Uploaded audio file cannot be found: " + audioPath);
         }
 
         AiProperties.Transcription config = aiProperties.transcription();
         TranscriptionProvider provider = providers.transcription(config.provider());
         sessionRepository.updateStatus(sessionId, SessionStatus.TRANSCRIBING);
+
+        Path audioPath;
+        try {
+            audioPath = audioStorage.forRead(session.audioUri());
+        } catch (IOException | RuntimeException ex) {
+            sessionRepository.updateStatus(sessionId, SessionStatus.FAILED);
+            throw ex instanceof RuntimeException re ? re : new IllegalStateException("Could not read uploaded audio", ex);
+        }
 
         try {
             TranscriptionResult result = provider.transcribe(audioPath);
@@ -85,6 +92,15 @@ public class TranscriptionService {
             }
 
             sessionRepository.updateStatus(sessionId, SessionStatus.TRANSCRIPTION_COMPLETE);
+
+            // The audio is only needed to produce the transcript; once we have it, drop the recording.
+            try {
+                audioStorage.delete(session.audioUri());
+                sessionRepository.clearAudioUri(sessionId);
+            } catch (IOException ignored) {
+                // Transcription already succeeded; a cleanup failure here is not worth failing the request for.
+            }
+
             return new TranscriptionResponse(
                     sessionId,
                     provider.name(),
@@ -96,6 +112,12 @@ public class TranscriptionService {
         } catch (RuntimeException ex) {
             sessionRepository.updateStatus(sessionId, SessionStatus.FAILED);
             throw ex;
+        } finally {
+            try {
+                audioStorage.releaseRead(session.audioUri(), audioPath);
+            } catch (IOException ignored) {
+                // Best-effort cleanup of a temp download copy.
+            }
         }
     }
 }

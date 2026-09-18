@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.secondmemory.android.data.AppSettings
 import com.secondmemory.android.data.HistoryUiState
+import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
+import com.secondmemory.android.network.LoginResult
 import com.secondmemory.android.recording.MemoryRecordingService
 import com.secondmemory.android.state.MemoryState
 import kotlinx.coroutines.Dispatchers
@@ -19,29 +21,65 @@ import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<MemoryUiState> = MemoryState.state
-    private val mutableBackendUrl = MutableStateFlow(AppSettings.backendUrl(application))
-    val backendUrl: StateFlow<String> = mutableBackendUrl.asStateFlow()
     private val mutableHistory = MutableStateFlow(HistoryUiState())
     val history: StateFlow<HistoryUiState> = mutableHistory.asStateFlow()
+    private val mutableAuth = MutableStateFlow(AppSettings.isLoggedIn(application))
+    val isLoggedIn: StateFlow<Boolean> = mutableAuth.asStateFlow()
+    private val mutableLoginError = MutableStateFlow<String?>(null)
+    val loginError: StateFlow<String?> = mutableLoginError.asStateFlow()
+    private val mutableLoggingIn = MutableStateFlow(false)
+    val loggingIn: StateFlow<Boolean> = mutableLoggingIn.asStateFlow()
+    private val mutableUsername = MutableStateFlow(AppSettings.username(application))
+    val username: StateFlow<String?> = mutableUsername.asStateFlow()
 
     init { MemoryState.restore(AppSettings.lastResult(application), AppSettings.lastAudio(application)) }
 
-    fun updateBackendUrl(value: String) { mutableBackendUrl.value = value }
+    private fun client(): BackendClient {
+        val app = getApplication<Application>()
+        return BackendClient(BuildConfig.DEFAULT_BACKEND_URL, AppSettings.authToken(app))
+    }
 
-    fun saveAndTestBackend() {
+    private fun handleAuthFailure() {
+        AppSettings.clearSession(getApplication())
+        mutableAuth.value = false
+        mutableUsername.value = null
+    }
+
+    fun login(username: String, password: String) = authenticate(username, password) { user, pass ->
+        BackendClient(BuildConfig.DEFAULT_BACKEND_URL).login(user, pass)
+    }
+
+    fun register(username: String, password: String) = authenticate(username, password) { user, pass ->
+        BackendClient(BuildConfig.DEFAULT_BACKEND_URL).register(user, pass)
+    }
+
+    private fun authenticate(username: String, password: String, call: suspend (String, String) -> LoginResult) {
+        if (username.isBlank() || password.isBlank()) return
+        mutableLoggingIn.value = true
+        mutableLoginError.value = null
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val url = AppSettings.saveBackendUrl(getApplication(), mutableBackendUrl.value)
-                MemoryState.connection(BackendClient(url).health())
-            } catch (ex: Exception) {
-                MemoryState.connection(ex.message ?: "Connection failed")
+            runCatching {
+                call(username.trim(), password)
+            }.onSuccess { result ->
+                AppSettings.saveSession(getApplication(), result.token, result.userId, result.username)
+                mutableUsername.value = result.username
+                mutableLoggingIn.value = false
+                mutableAuth.value = true
+            }.onFailure { error ->
+                mutableLoggingIn.value = false
+                mutableLoginError.value = error.message ?: "Could not sign in"
             }
         }
     }
 
+    fun logout() {
+        AppSettings.clearSession(getApplication())
+        mutableAuth.value = false
+        mutableUsername.value = null
+    }
+
     fun activate(context: Context) {
         try {
-            AppSettings.saveBackendUrl(context, mutableBackendUrl.value)
             MemoryRecordingService.activate(context)
         } catch (ex: Exception) { MemoryState.failure(ex.message ?: "Could not activate Memory") }
     }
@@ -54,9 +92,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         MemoryState.asking(true)
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val settings = getApplication<Application>()
-                val result = BackendClient(AppSettings.backendUrl(settings)).ask(AppSettings.userId(settings), question.trim())
+                val result = client().ask(question.trim())
                 MemoryState.answer(result)
+            } catch (ex: AuthException) {
+                handleAuthFailure()
+                MemoryState.askFailure(ex.message ?: "Session expired, please sign in again")
             } catch (ex: Exception) {
                 MemoryState.askFailure(ex.message ?: "Could not ask Memory")
             }
@@ -67,11 +107,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableHistory.update { it.copy(loading = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val app = getApplication<Application>()
-                BackendClient(AppSettings.backendUrl(app)).listSessions(AppSettings.userId(app))
+                client().listSessions()
             }.onSuccess { sessions ->
                 mutableHistory.update { it.copy(loading = false, sessions = sessions, error = null) }
             }.onFailure { error ->
+                if (error is AuthException) handleAuthFailure()
                 mutableHistory.update { it.copy(loading = false, error = error.message ?: "Could not load conversations") }
             }
         }
@@ -81,11 +121,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableHistory.update { it.copy(loading = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val app = getApplication<Application>()
-                BackendClient(AppSettings.backendUrl(app)).sessionDetail(AppSettings.userId(app), sessionId)
+                client().sessionDetail(sessionId)
             }.onSuccess { detail ->
                 mutableHistory.update { it.copy(loading = false, selected = detail, error = null) }
             }.onFailure { error ->
+                if (error is AuthException) handleAuthFailure()
                 mutableHistory.update { it.copy(loading = false, error = error.message ?: "Could not open conversation") }
             }
         }
@@ -97,9 +137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val detail = mutableHistory.value.selected ?: return
         if (title.isBlank()) return
         mutateHistory {
-            val app = getApplication<Application>()
-            val updated = BackendClient(AppSettings.backendUrl(app))
-                .renameSession(AppSettings.userId(app), detail.session.id, title.trim())
+            val updated = client().renameSession(detail.session.id, title.trim())
             mutableHistory.update { state ->
                 state.copy(
                     selected = state.selected?.copy(session = updated),
@@ -112,8 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteConversation() {
         val detail = mutableHistory.value.selected ?: return
         mutateHistory {
-            val app = getApplication<Application>()
-            BackendClient(AppSettings.backendUrl(app)).deleteSession(AppSettings.userId(app), detail.session.id)
+            client().deleteSession(detail.session.id)
             mutableHistory.update { state ->
                 state.copy(selected = null, sessions = state.sessions.filterNot { it.id == detail.session.id })
             }
@@ -125,9 +162,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateMemory(memoryId: String, status: String? = null, active: Boolean? = null) {
         mutateHistory {
-            val app = getApplication<Application>()
-            val updated = BackendClient(AppSettings.backendUrl(app))
-                .updateMemory(AppSettings.userId(app), memoryId, status, active)
+            val updated = client().updateMemory(memoryId, status, active)
             mutableHistory.update { state ->
                 val current = state.selected ?: return@update state
                 val items = if (active == false) current.memories.filterNot { it.id == memoryId }
@@ -143,6 +178,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching(operation).onSuccess {
                 mutableHistory.update { it.copy(mutating = false) }
             }.onFailure { error ->
+                if (error is AuthException) handleAuthFailure()
                 mutableHistory.update {
                     it.copy(mutating = false, error = error.message ?: "Could not update conversation")
                 }

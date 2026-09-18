@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Second Memory</string>
+    <string name="app_name">MindCue</string>
     <string name="recording_channel_name">Active memory</string>
-    <string name="recording_channel_description">Shows when Second Memory is listening</string>
+    <string name="recording_channel_description">Shows when MindCue is listening</string>
 </resources>

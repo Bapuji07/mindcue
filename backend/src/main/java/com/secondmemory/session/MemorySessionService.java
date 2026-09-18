@@ -29,19 +29,19 @@ public class MemorySessionService {
         this.audioStorage = audioStorage;
     }
 
-    public MemorySession create(CreateSessionRequest request) {
-        return repository.create(request);
+    public MemorySession create(UUID userId, CreateSessionRequest request) {
+        return repository.create(userId, request);
     }
 
-    public MemorySession get(UUID id) {
-        return repository.findById(id)
+    public MemorySession get(UUID id, UUID userId) {
+        return repository.findByIdAndUser(id, userId)
                 .orElseThrow(() -> new NotFoundException("Memory session not found: " + id));
     }
 
-    public MemorySession finish(UUID id, Instant endedAt, Integer durationSeconds) {
-        get(id);
+    public MemorySession finish(UUID id, UUID userId, Instant endedAt, Integer durationSeconds) {
+        get(id, userId);
         repository.finish(id, endedAt, durationSeconds);
-        return get(id);
+        return get(id, userId);
     }
 
     public List<MemorySession> list(UUID userId, int limit) {
@@ -49,26 +49,21 @@ public class MemorySessionService {
     }
 
     public MemorySessionDetail detail(UUID id, UUID userId) {
-        MemorySession session = getForUser(id, userId);
+        MemorySession session = get(id, userId);
         return new MemorySessionDetail(session, memories.listBySession(id, userId), transcripts.findBySession(id));
     }
 
     public MemorySession rename(UUID id, UUID userId, String title) {
-        getForUser(id, userId);
+        get(id, userId);
         repository.updateTitle(id, userId, title.trim());
-        return getForUser(id, userId);
+        return get(id, userId);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public void delete(UUID id, UUID userId) throws IOException {
-        MemorySession session = getForUser(id, userId);
+        MemorySession session = get(id, userId);
         memories.deleteBySession(id, userId);
         repository.delete(id, userId);
         audioStorage.delete(session.audioUri());
-    }
-
-    private MemorySession getForUser(UUID id, UUID userId) {
-        return repository.findByIdAndUser(id, userId)
-                .orElseThrow(() -> new NotFoundException("Memory session not found: " + id));
     }
 }

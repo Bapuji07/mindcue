@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 public class MemoryAnswerService {
@@ -34,13 +35,13 @@ public class MemoryAnswerService {
         this.memories = memories;
     }
 
-    public AskMemoryResponse ask(AskMemoryRequest request) {
+    public AskMemoryResponse ask(AskMemoryRequest request, UUID userId) {
         int topK = request.topK() == null ? 8 : Math.max(1, Math.min(request.topK(), 20));
 
         // Local MVP currently runs without pgvector. Rank a bounded recent memory set by
         // keyword overlap. The provider-facing answer layer stays unchanged, so vector
         // retrieval can replace this later without changing the API contract.
-        List<MemorySearchHit> hits = keywordRetrieve(request, topK);
+        List<MemorySearchHit> hits = keywordRetrieve(request, userId, topK);
 
         if (hits.isEmpty()) {
             return new AskMemoryResponse(
@@ -80,9 +81,9 @@ public class MemoryAnswerService {
         return new AskMemoryResponse(answer, sources);
     }
 
-    private List<MemorySearchHit> keywordRetrieve(AskMemoryRequest request, int topK) {
+    private List<MemorySearchHit> keywordRetrieve(AskMemoryRequest request, UUID userId, int topK) {
         Set<String> terms = tokenize(request.question());
-        List<MemoryRecord> candidates = memories.list(request.userId(), null, 500);
+        List<MemoryRecord> candidates = memories.list(userId, null, 500);
 
         List<MemorySearchHit> scored = candidates.stream()
                 .map(memory -> new MemorySearchHit(memory, score(memory, terms)))

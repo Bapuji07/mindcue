@@ -1,8 +1,10 @@
 package com.secondmemory.memory;
 
 import com.secondmemory.ai.dto.ExtractedMemoryResponse;
+import com.secondmemory.auth.CurrentUser;
 import com.secondmemory.common.NotFoundException;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -22,22 +24,23 @@ public class MemoryController {
     }
 
     @GetMapping("/memories")
-    public List<MemoryRecord> list(@RequestParam UUID userId,
-                                   @RequestParam(required = false) MemoryType type,
-                                   @RequestParam(defaultValue = "100") int limit) {
+    public List<MemoryRecord> list(@RequestParam(required = false) MemoryType type,
+                                   @RequestParam(defaultValue = "100") int limit,
+                                   Authentication auth) {
         int safeLimit = Math.max(1, Math.min(limit, 500));
-        return repository.list(userId, type, safeLimit);
+        return repository.list(CurrentUser.id(auth), type, safeLimit);
     }
 
     @PostMapping("/ask")
-    public AskMemoryResponse ask(@jakarta.validation.Valid @RequestBody AskMemoryRequest request) {
-        return answerService.ask(request);
+    public AskMemoryResponse ask(@Valid @RequestBody AskMemoryRequest request, Authentication auth) {
+        return answerService.ask(request, CurrentUser.id(auth));
     }
 
     @PatchMapping("/memories/{id}")
     public MemoryRecord update(@PathVariable UUID id,
-                               @RequestParam UUID userId,
-                               @Valid @RequestBody UpdateMemoryRequest request) {
+                               @Valid @RequestBody UpdateMemoryRequest request,
+                               Authentication auth) {
+        UUID userId = CurrentUser.id(auth);
         repository.findByIdAndUser(id, userId)
                 .orElseThrow(() -> new NotFoundException("Memory not found: " + id));
         repository.update(id, userId, request);
@@ -45,7 +48,7 @@ public class MemoryController {
     }
 
     @PostMapping("/sessions/{sessionId}/extract")
-    public ExtractedMemoryResponse extract(@PathVariable UUID sessionId) {
-        return extractionService.extract(sessionId);
+    public ExtractedMemoryResponse extract(@PathVariable UUID sessionId, Authentication auth) {
+        return extractionService.extract(sessionId, CurrentUser.id(auth));
     }
 }

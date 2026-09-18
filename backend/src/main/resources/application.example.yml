@@ -21,7 +21,19 @@ server:
 
 memory:
   storage:
+    provider: ${MEMORY_STORAGE_PROVIDER:local}
     audio-directory: ${AUDIO_STORAGE_DIR:./data/audio}
+    s3:
+      bucket: ${MEMORY_STORAGE_S3_BUCKET:}
+      region: ${MEMORY_STORAGE_S3_REGION:ap-south-1}
+
+  auth:
+    jwt:
+      secret: ${AUTH_JWT_SECRET:CHANGE_ME_TO_A_LONG_RANDOM_VALUE}
+      expiry-minutes: ${AUTH_JWT_EXPIRY_MINUTES:43200}
+    bootstrap:
+      username: ${AUTH_BOOTSTRAP_USERNAME:}
+      password: ${AUTH_BOOTSTRAP_PASSWORD:}
 
   ai:
     chat:

@@ -4,7 +4,6 @@ import com.secondmemory.android.data.AskResult
 import com.secondmemory.android.data.AskSource
 import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.ResultJson
-import com.secondmemory.android.data.SessionResult
 import com.secondmemory.android.data.ConversationDetail
 import com.secondmemory.android.data.ConversationSession
 import org.json.JSONObject
@@ -16,7 +15,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.util.UUID
 
-class BackendClient(baseUrl: String) {
+class BackendClient(baseUrl: String, private val token: String? = null) {
     private val base = URI(baseUrl.trimEnd('/') + "/")
 
     fun health(): String {
@@ -25,9 +24,26 @@ class BackendClient(baseUrl: String) {
         return "Connected to ${json.optString("transcriptionProvider")} transcription"
     }
 
-    fun createSession(userId: String, startedAt: String): String {
+    fun login(username: String, password: String): LoginResult {
         val body = JSONObject().apply {
-            put("userId", userId)
+            put("username", username)
+            put("password", password)
+        }
+        val json = request("POST", "api/v1/auth/login", body)
+        return LoginResult(json.getString("token"), json.getString("userId"), json.getString("username"))
+    }
+
+    fun register(username: String, password: String): LoginResult {
+        val body = JSONObject().apply {
+            put("username", username)
+            put("password", password)
+        }
+        val json = request("POST", "api/v1/auth/register", body)
+        return LoginResult(json.getString("token"), json.getString("userId"), json.getString("username"))
+    }
+
+    fun createSession(startedAt: String): String {
+        val body = JSONObject().apply {
             put("title", "Phone memory ${OffsetDateTime.now().toLocalDateTime()}")
             put("startedAt", startedAt)
             put("timezone", ZoneId.systemDefault().id)
@@ -54,24 +70,13 @@ class BackendClient(baseUrl: String) {
         readResponse(connection)
     }
 
-    fun process(sessionId: String): SessionResult {
-        val json = request("POST", "api/v1/memory/sessions/$sessionId/process", JSONObject())
-        val transcription = json.getJSONObject("transcription")
-        val extraction = json.getJSONObject("extraction")
-        val array = extraction.optJSONArray("memories")
-        val memories = if (array == null) emptyList() else List(array.length()) {
-            ResultJson.memoryFromJson(array.getJSONObject(it))
-        }
-        return SessionResult(
-            sessionId = sessionId,
-            transcript = transcription.optString("transcriptText"),
-            summary = extraction.optString("summary"),
-            memories = memories
-        )
+    /** Starts transcription + extraction in the background on the server and returns immediately. */
+    fun startProcessing(sessionId: String) {
+        request("POST", "api/v1/memory/sessions/$sessionId/process", JSONObject())
     }
 
-    fun ask(userId: String, question: String): AskResult {
-        val body = JSONObject().apply { put("userId", userId); put("question", question); put("topK", 5) }
+    fun ask(question: String): AskResult {
+        val body = JSONObject().apply { put("question", question); put("topK", 5) }
         val json = request("POST", "api/v1/memory/ask", body)
         val sourceJson = json.optJSONArray("sources")
         val sources = if (sourceJson == null) emptyList() else List(sourceJson.length()) { index ->
@@ -87,13 +92,13 @@ class BackendClient(baseUrl: String) {
         return AskResult(json.optString("answer"), sources)
     }
 
-    fun listSessions(userId: String): List<ConversationSession> {
-        val array = request("GET", "api/v1/memory/sessions?userId=$userId&limit=100").getJSONArray("sessions")
+    fun listSessions(): List<ConversationSession> {
+        val array = request("GET", "api/v1/memory/sessions?limit=100").getJSONArray("sessions")
         return List(array.length()) { sessionFromJson(array.getJSONObject(it)) }
     }
 
-    fun sessionDetail(userId: String, sessionId: String): ConversationDetail {
-        val json = request("GET", "api/v1/memory/sessions/$sessionId/detail?userId=$userId")
+    fun sessionDetail(sessionId: String): ConversationDetail {
+        val json = request("GET", "api/v1/memory/sessions/$sessionId/detail")
         val memoriesJson = json.getJSONArray("memories")
         val chunks = json.getJSONArray("transcriptChunks")
         val transcript = buildString {
@@ -111,22 +116,22 @@ class BackendClient(baseUrl: String) {
         )
     }
 
-    fun renameSession(userId: String, sessionId: String, title: String): ConversationSession {
+    fun renameSession(sessionId: String, title: String): ConversationSession {
         val body = JSONObject().put("title", title)
-        return sessionFromJson(request("PATCH", "api/v1/memory/sessions/$sessionId?userId=$userId", body))
+        return sessionFromJson(request("PATCH", "api/v1/memory/sessions/$sessionId", body))
     }
 
-    fun deleteSession(userId: String, sessionId: String) {
-        request("DELETE", "api/v1/memory/sessions/$sessionId?userId=$userId")
+    fun deleteSession(sessionId: String) {
+        request("DELETE", "api/v1/memory/sessions/$sessionId")
     }
 
-    fun updateMemory(userId: String, memoryId: String, status: String? = null, active: Boolean? = null): MemoryItem {
+    fun updateMemory(memoryId: String, status: String? = null, active: Boolean? = null): MemoryItem {
         val body = JSONObject().apply {
             status?.let { put("resolutionStatus", it) }
             active?.let { put("active", it) }
         }
         return ResultJson.memoryFromJson(
-            request("PATCH", "api/v1/memory/memories/$memoryId?userId=$userId", body)
+            request("PATCH", "api/v1/memory/memories/$memoryId", body)
         )
     }
 
@@ -136,7 +141,8 @@ class BackendClient(baseUrl: String) {
         status = json.optString("status"),
         startedAt = json.optString("startedAt"),
         durationSeconds = if (json.isNull("durationSeconds")) null else json.optInt("durationSeconds"),
-        summary = if (json.isNull("summary")) null else json.optString("summary").takeIf { it.isNotBlank() }
+        summary = if (json.isNull("summary")) null else json.optString("summary").takeIf { it.isNotBlank() },
+        errorMessage = if (json.isNull("errorMessage")) null else json.optString("errorMessage").takeIf { it.isNotBlank() }
     )
 
     private fun request(method: String, path: String, body: JSONObject? = null): JSONObject {
@@ -161,6 +167,7 @@ class BackendClient(baseUrl: String) {
             readTimeout = 240_000
             useCaches = false
             setRequestProperty("Accept", "application/json")
+            if (token != null) setRequestProperty("Authorization", "Bearer $token")
         }
     }
 
@@ -171,7 +178,9 @@ class BackendClient(baseUrl: String) {
             val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (code !in 200..299) {
                 val message = runCatching { JSONObject(raw).optString("message") }.getOrNull()
-                throw BackendException(message?.takeIf { it.isNotBlank() } ?: "Backend returned HTTP $code")
+                val friendly = message?.takeIf { it.isNotBlank() } ?: "Backend returned HTTP $code"
+                if (code == 401) throw AuthException(friendly)
+                throw BackendException(friendly)
             }
             if (raw.isBlank()) JSONObject() else JSONObject(raw)
         } finally {
@@ -180,4 +189,7 @@ class BackendClient(baseUrl: String) {
     }
 }
 
-class BackendException(message: String) : Exception(message)
+data class LoginResult(val token: String, val userId: String, val username: String)
+
+open class BackendException(message: String) : Exception(message)
+class AuthException(message: String) : BackendException(message)

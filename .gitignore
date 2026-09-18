@@ -7,7 +7,7 @@ backend/target/
 android/.gradle/
 android/local.properties
 android/app/build/
-data/
+/backend/data/
 audio.mp4
 test-audio.*
 *.log

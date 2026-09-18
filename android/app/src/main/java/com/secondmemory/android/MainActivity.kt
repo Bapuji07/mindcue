@@ -8,6 +8,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,14 +27,45 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.automirrored.outlined.Notes
+import androidx.compose.material.icons.automirrored.outlined.Rule
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.Favorite
+import androidx.compose.material.icons.outlined.Handshake
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,14 +87,19 @@ class MainActivity : ComponentActivity() {
 }
 
 private val Evergreen = Color(0xFF176B52)
+private val EvergreenDark = Color(0xFF0F4E3B)
 private val DeepGreen = Color(0xFF10231D)
 private val Mint = Color(0xFFE5F4EC)
 private val Canvas = Color(0xFFF7F8F5)
 private val Muted = Color(0xFF66756F)
 private val ErrorRed = Color(0xFFB3261E)
+private val Accent = Color(0xFF7FE0B2)
+private val CardBorder = Color(0x140F4E3B)
 
-private enum class AppPage(val label: String) {
-    HOME("Home"), MEMORIES("Memories"), SETTINGS("Settings")
+private enum class AppPage(val label: String, val outlineIcon: ImageVector, val filledIcon: ImageVector) {
+    HOME("Home", Icons.Outlined.Home, Icons.Filled.Home),
+    MEMORIES("Memories", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
+    SETTINGS("Settings", Icons.Outlined.Settings, Icons.Filled.Settings)
 }
 
 @Composable
@@ -70,8 +118,16 @@ private fun SecondMemoryTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
+    val isLoggedIn by vm.isLoggedIn.collectAsStateWithLifecycle()
+    if (!isLoggedIn) {
+        val loginError by vm.loginError.collectAsStateWithLifecycle()
+        val loggingIn by vm.loggingIn.collectAsStateWithLifecycle()
+        LoginScreen(loggingIn, loginError, vm::login, vm::register)
+        return
+    }
+
     val state by vm.state.collectAsStateWithLifecycle()
-    val backendUrl by vm.backendUrl.collectAsStateWithLifecycle()
+    val username by vm.username.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pageName by rememberSaveable { mutableStateOf(AppPage.HOME.name) }
@@ -102,24 +158,29 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
         containerColor = Canvas,
         topBar = {
             TopAppBar(
-                title = { Text(if (focusMode) "Second Memory" else page.label, fontWeight = FontWeight.Bold) },
+                title = { Text(if (focusMode) "MindCue" else page.label, fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Canvas)
             )
         },
         bottomBar = {
             if (!focusMode) {
-                NavigationBar(containerColor = Color.White) {
+                NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
                     AppPage.entries.forEach { destination ->
+                        val selected = page == destination
                         NavigationBarItem(
-                            selected = page == destination,
+                            selected = selected,
                             onClick = { pageName = destination.name },
                             icon = {
-                                Box(
-                                    Modifier.size(if (page == destination) 8.dp else 6.dp)
-                                        .background(if (page == destination) Evergreen else Muted, CircleShape)
+                                Icon(
+                                    if (selected) destination.filledIcon else destination.outlineIcon,
+                                    contentDescription = destination.label
                                 )
                             },
-                            label = { Text(destination.label) }
+                            label = { Text(destination.label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Evergreen, selectedTextColor = Evergreen,
+                                indicatorColor = Mint, unselectedIconColor = Muted, unselectedTextColor = Muted
+                            )
                         )
                     }
                 }
@@ -138,9 +199,86 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                 vm::openConversation, vm::closeConversation, vm::renameConversation,
                 vm::deleteConversation, vm::completeMemory, vm::dismissMemory
             )
-            else -> SettingsScreen(
-                Modifier.padding(padding), state, backendUrl, vm::updateBackendUrl, vm::saveAndTestBackend
+            else -> SettingsScreen(Modifier.padding(padding), username, vm::logout)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LoginScreen(
+    loggingIn: Boolean,
+    error: String?,
+    onLogin: (String, String) -> Unit,
+    onRegister: (String, String) -> Unit
+) {
+    var username by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var registerMode by rememberSaveable { mutableStateOf(false) }
+    Scaffold(containerColor = Canvas) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                Modifier.size(72.dp).background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("M", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineMedium)
+            }
+            Spacer(Modifier.height(18.dp))
+            Text("MindCue", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (registerMode) "Create an account to continue." else "Sign in to continue.",
+                color = Muted, textAlign = TextAlign.Center
             )
+            Spacer(Modifier.height(28.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, CardBorder),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(22.dp)) {
+                    OutlinedTextField(
+                        value = username, onValueChange = { username = it }, label = { Text("Username") },
+                        leadingIcon = { Icon(Icons.Outlined.Person, contentDescription = null) },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = password, onValueChange = { password = it }, label = { Text("Password") },
+                        leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                        singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                        supportingText = { if (registerMode) Text("At least 8 characters") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    AnimatedVisibility(error != null) {
+                        Column {
+                            Spacer(Modifier.height(12.dp))
+                            error?.let { InlineMessage(it, ErrorRed) }
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { if (registerMode) onRegister(username, password) else onLogin(username, password) },
+                        enabled = !loggingIn && username.isNotBlank() &&
+                            (if (registerMode) password.length >= 8 else password.isNotBlank()),
+                        colors = ButtonDefaults.buttonColors(containerColor = Evergreen),
+                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                    ) {
+                        if (loggingIn) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+                        else Text(if (registerMode) "Create account" else "Sign in", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = { registerMode = !registerMode }) {
+                Text(if (registerMode) "Already have an account? Sign in" else "Don't have an account? Create one")
+            }
         }
     }
 }
@@ -169,17 +307,26 @@ private fun HomeScreen(
             Text("Activate Memory when a conversation matters.", color = Muted, textAlign = TextAlign.Center)
         }
         item {
-            Button(
-                onClick = onActivate, modifier = Modifier.size(190.dp), shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Evergreen),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 5.dp)
+            Box(
+                modifier = Modifier
+                    .size(190.dp)
+                    .shadow(14.dp, CircleShape, spotColor = Evergreen)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)))
+                    .clickable(onClick = onActivate),
+                contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(14.dp).background(Color(0xFF7FE0B2), CircleShape))
+                    Box(
+                        Modifier.size(44.dp).background(Color.White.copy(alpha = 0.14f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Outlined.Mic, contentDescription = null, tint = Accent, modifier = Modifier.size(24.dp))
+                    }
                     Spacer(Modifier.height(12.dp))
                     Text(
                         "Activate\nMemory", style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
+                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = Color.White
                     )
                 }
             }
@@ -188,7 +335,11 @@ private fun HomeScreen(
         state.error?.let { message ->
             item {
                 SurfaceCard {
-                    Text("Recording needs attention", fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Recording needs attention", fontWeight = FontWeight.Bold)
+                    }
                     Spacer(Modifier.height(6.dp))
                     Text(message, color = Muted)
                     if (state.lastAudioPath != null) {
@@ -206,7 +357,11 @@ private fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("Latest memory", color = Evergreen, style = MaterialTheme.typography.labelLarge)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = Evergreen, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Latest memory", color = Evergreen, style = MaterialTheme.typography.labelLarge)
+                            }
                             Spacer(Modifier.height(5.dp))
                             Text(
                                 result.summary.ifBlank { "Your latest conversation is ready." },
@@ -231,8 +386,25 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
         verticalArrangement = Arrangement.Center
     ) {
         if (active) {
-            Box(Modifier.size(150.dp).background(DeepGreen, CircleShape), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(22.dp).background(Color(0xFF69DCA5), CircleShape))
+            val pulse = rememberInfiniteTransition(label = "pulse")
+            val ringScale by pulse.animateFloat(
+                initialValue = 1f, targetValue = 1.35f,
+                animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart),
+                label = "ringScale"
+            )
+            val ringAlpha by pulse.animateFloat(
+                initialValue = 0.35f, targetValue = 0f,
+                animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart),
+                label = "ringAlpha"
+            )
+            Box(Modifier.size(150.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(150.dp).scale(ringScale)
+                        .background(Accent.copy(alpha = ringAlpha), CircleShape)
+                )
+                Box(Modifier.size(120.dp).background(DeepGreen, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = Accent, modifier = Modifier.size(36.dp))
+                }
             }
             Spacer(Modifier.height(28.dp))
             Text("Memory is active", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -246,10 +418,11 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
             Spacer(Modifier.height(36.dp))
             Button(
                 onClick = onDeactivate, modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = DeepGreen)
             ) { Text("Deactivate Memory", fontWeight = FontWeight.SemiBold) }
         } else {
-            CircularProgressIndicator(Modifier.size(52.dp), strokeWidth = 4.dp)
+            CircularProgressIndicator(Modifier.size(52.dp), strokeWidth = 4.dp, color = Evergreen)
             Spacer(Modifier.height(24.dp))
             Text("Creating your memory", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
@@ -293,7 +466,7 @@ private fun MemoriesScreen(
         }
         history.error?.let { item { InlineMessage(it, ErrorRed) } }
         if (!history.loading && history.sessions.isEmpty()) {
-            item { EmptyCard("Your processed conversations will appear here after you deactivate Memory.") }
+            item { EmptyCard("Your processed conversations will appear here after you deactivate Memory.", Icons.Outlined.History) }
         } else {
             items(history.sessions, key = { it.id }) { session -> ConversationCard(session) { onOpen(session.id) } }
         }
@@ -306,27 +479,46 @@ private fun ConversationCard(session: ConversationSession, onClick: () -> Unit) 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, CardBorder),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
     ) {
         Column(Modifier.padding(18.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
                 Text(
                     session.title, fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    session.status.lowercase().replaceFirstChar { it.uppercase() }, color = Evergreen,
-                    style = MaterialTheme.typography.labelMedium
-                )
+                Spacer(Modifier.width(8.dp))
+                StatusPill(session.status)
             }
-            Spacer(Modifier.height(7.dp))
-            Text(formatDate(session.startedAt), color = Muted, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(9.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.CalendarToday, contentDescription = null, tint = Muted, modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(5.dp))
+                Text(formatDate(session.startedAt), color = Muted, style = MaterialTheme.typography.bodySmall)
+            }
             session.summary?.let {
                 Spacer(Modifier.height(9.dp))
                 Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
+    }
+}
+
+@Composable
+private fun StatusPill(status: String) {
+    val label = status.lowercase().replaceFirstChar { it.uppercase() }
+    val color = when (status.uppercase()) {
+        "COMPLETED", "TRANSCRIPTION_COMPLETE" -> Evergreen
+        "FAILED" -> ErrorRed
+        else -> Color(0xFFB07E1E)
+    }
+    Box(
+        Modifier.background(color.copy(alpha = 0.12f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(label, color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -399,7 +591,7 @@ private fun ConversationDetailScreen(
         }
         item { SectionTitle("Memories", detail.memories.size.toString()) }
         if (detail.memories.isEmpty()) {
-            item { EmptyCard("No active memories remain in this conversation.") }
+            item { EmptyCard("No active memories remain in this conversation.", Icons.Outlined.AutoAwesome) }
         } else {
             items(detail.memories, key = { it.id ?: "${it.type}-${it.title}" }) { memory ->
                 MemoryCard(
@@ -427,13 +619,7 @@ private fun ConversationDetailScreen(
 }
 
 @Composable
-private fun SettingsScreen(
-    modifier: Modifier,
-    state: MemoryUiState,
-    backendUrl: String,
-    onUrlChange: (String) -> Unit,
-    onSave: () -> Unit
-) {
+private fun SettingsScreen(modifier: Modifier, username: String?, onLogout: () -> Unit) {
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -441,19 +627,30 @@ private fun SettingsScreen(
         item {
             Spacer(Modifier.height(4.dp))
             SurfaceCard {
-                Text("Backend connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Text("Connect this app to your MindCue server.", color = Muted)
-                Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = backendUrl, onValueChange = onUrlChange, label = { Text("Backend URL") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) { Text("Save and test") }
-                state.connectionMessage?.let {
-                    Spacer(Modifier.height(10.dp))
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = Muted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(56.dp).background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            username?.take(1)?.uppercase() ?: "?",
+                            color = Color.White, fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text("Signed in as", color = Muted, style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            username ?: "Unknown", fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp)); Text("Log out")
                 }
             }
         }
@@ -475,20 +672,49 @@ private fun SectionTitle(title: String, detail: String? = null) {
 private fun SurfaceCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, CardBorder),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth()
     ) { Column(Modifier.padding(18.dp), content = content) }
 }
 
 @Composable
-private fun EmptyCard(message: String) {
-    SurfaceCard { Text(message, color = Muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
+private fun EmptyCard(message: String, icon: ImageVector = Icons.Outlined.History) {
+    SurfaceCard {
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(48.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, tint = Evergreen, modifier = Modifier.size(24.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(message, color = Muted, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+private fun memoryTypeIcon(type: String): ImageVector = when (type.uppercase()) {
+    "TASK" -> Icons.Outlined.CheckCircle
+    "PROMISE" -> Icons.Outlined.Handshake
+    "IDEA" -> Icons.Outlined.Lightbulb
+    "QUESTION" -> Icons.AutoMirrored.Outlined.HelpOutline
+    "FACT" -> Icons.Outlined.Info
+    "DECISION" -> Icons.AutoMirrored.Outlined.Rule
+    "PROBLEM" -> Icons.Outlined.WarningAmber
+    "EVENT" -> Icons.Outlined.Event
+    "PREFERENCE" -> Icons.Outlined.Favorite
+    else -> Icons.AutoMirrored.Outlined.Notes
 }
 
 @Composable
 private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismiss: (() -> Unit)? = null) {
     SurfaceCard {
-        Text(memory.type, color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(7.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(memoryTypeIcon(memory.type), contentDescription = null, tint = Evergreen, modifier = Modifier.size(15.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(memory.type, color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+        }
+        Spacer(Modifier.height(9.dp))
         Text(memory.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(5.dp))
         Text(memory.content)
@@ -504,7 +730,12 @@ private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismi
         if (onDone != null || onDismiss != null) {
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                onDone?.let { OutlinedButton(onClick = it) { Text("Mark done") } }
+                onDone?.let {
+                    OutlinedButton(onClick = it) {
+                        Icon(Icons.Outlined.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp)); Text("Mark done")
+                    }
+                }
                 onDismiss?.let { TextButton(onClick = it) { Text("Dismiss") } }
             }
         }
@@ -515,7 +746,13 @@ private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismi
 private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
     var question by rememberSaveable { mutableStateOf("") }
     SurfaceCard {
-        Text("Ask Memory", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(34.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Evergreen, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text("Ask Memory", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(5.dp))
         Text("Find something from your conversations.", color = Muted)
         Spacer(Modifier.height(14.dp))
@@ -530,8 +767,12 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth()
         ) {
             if (state.asking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
-            else Text("Ask")
+            else {
+                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp)); Text("Ask")
+            }
         }
+        AnimatedVisibility(state.askResult != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         state.askResult?.let { result ->
             Spacer(Modifier.height(16.dp)); HorizontalDivider(); Spacer(Modifier.height(14.dp))
             Text(result.answer, fontWeight = FontWeight.Medium)
@@ -550,6 +791,7 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
                 }
             }
         }
+        }
         state.askError?.let {
             Spacer(Modifier.height(10.dp)); Text(it, color = ErrorRed, style = MaterialTheme.typography.bodySmall)
         }
@@ -561,7 +803,13 @@ private fun InlineMessage(message: String, color: Color) {
     Card(
         colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.09f)),
         shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()
-    ) { Text(message, color = color, modifier = Modifier.padding(14.dp)) }
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(message, color = color)
+        }
+    }
 }
 
 private fun formatDuration(seconds: Long): String =

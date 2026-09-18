@@ -24,13 +24,17 @@ jobs:
         working-directory: backend
         run: ./mvnw -B package
 
-      - name: Stage jar for deploy
-        run: cp backend/target/second-memory-backend-*.jar app.jar
+      - name: Stage deploy artifacts
+        run: |
+          cp backend/target/second-memory-backend-*.jar app.jar
+          cp backend/src/main/resources/application.example.yml application.yml
 
       - uses: actions/upload-artifact@v4
         with:
           name: backend-jar
-          path: app.jar
+          path: |
+            app.jar
+            application.yml
           retention-days: 5
 
   deploy:
@@ -47,10 +51,17 @@ jobs:
           # Stop first, then swap the jar, then start - swapping a live jar with `cp` while the
           # old process still has it open truncates the file out from under it mid-shutdown and
           # causes flaky restarts.
+          #
+          # application.yml is gitignored (it's only a template here - application.example.yml,
+          # placeholder ${VAR:default} mappings only, no secrets) and placed at /opt/mindcue so
+          # Spring Boot picks it up as external config from the working directory. Without it the
+          # CI-built jar has no application.yml at all (never checked out) and every ${DB_URL:...}
+          # style placeholder has nowhere to resolve from.
           sudo systemctl stop mindcue.service
           sudo cp /opt/mindcue/app.jar /opt/mindcue/app.jar.previous
           sudo cp app.jar /opt/mindcue/app.jar
-          sudo chown mindcue:mindcue /opt/mindcue/app.jar
+          sudo cp application.yml /opt/mindcue/application.yml
+          sudo chown mindcue:mindcue /opt/mindcue/app.jar /opt/mindcue/application.yml
           sudo systemctl start mindcue.service
 
           for i in $(seq 1 20); do

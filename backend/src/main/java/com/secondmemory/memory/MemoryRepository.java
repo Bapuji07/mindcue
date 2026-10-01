@@ -5,6 +5,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -55,30 +56,55 @@ public class MemoryRepository {
     }
 
     public List<MemoryRecord> list(UUID userId, MemoryType type, int limit) {
+        return search(userId, type, null, null, limit);
+    }
+
+    /**
+     * Filtered listing. Null filters are ignored; {@code query} is a case-insensitive
+     * substring match over title and content.
+     */
+    public List<MemoryRecord> search(UUID userId, MemoryType type, ResolutionStatus status, String query, int limit) {
         StringBuilder sql = new StringBuilder("SELECT * FROM memory WHERE user_id = ? AND is_active = TRUE");
+        List<Object> args = new ArrayList<>();
+        args.add(userId);
         if (type != null) {
-            sql.append(" AND type = '").append(type.name()).append("'");
+            sql.append(" AND type = ?");
+            args.add(type.name());
+        }
+        if (status != null) {
+            sql.append(" AND resolution_status = ?");
+            args.add(status.name());
+        }
+        if (query != null && !query.isBlank()) {
+            sql.append(" AND (title ILIKE ? ESCAPE '\\' OR content ILIKE ? ESCAPE '\\')");
+            String pattern = "%" + escapeLike(query.trim()) + "%";
+            args.add(pattern);
+            args.add(pattern);
         }
         sql.append(" ORDER BY created_at DESC LIMIT ?");
-        return jdbc.query(sql.toString(), (rs, rowNum) -> new MemoryRecord(
-                rs.getObject("id", UUID.class),
-                rs.getObject("user_id", UUID.class),
-                rs.getObject("session_id", UUID.class),
-                MemoryType.valueOf(rs.getString("type")),
-                rs.getString("title"),
-                rs.getString("content"),
-                rs.getBigDecimal("importance"),
-                rs.getBigDecimal("confidence"),
-                ResolutionStatus.valueOf(rs.getString("resolution_status")),
-                timestamp(rs.getTimestamp("occurred_at")),
-                timestamp(rs.getTimestamp("due_at")),
-                rs.getString("ai_provider"),
-                rs.getString("ai_model"),
-                rs.getString("prompt_version"),
-                rs.getBoolean("is_active"),
-                rs.getTimestamp("created_at").toInstant(),
-                rs.getTimestamp("updated_at").toInstant()
-        ), userId, limit);
+        args.add(limit);
+        return jdbc.query(sql.toString(), (rs, rowNum) -> mapRow(rs), args.toArray());
+    }
+
+    /** Open commitments, soonest due first (undated last), then most important. */
+    public List<MemoryRecord> listOpen(UUID userId, boolean overdueOnly, int limit) {
+        String sql = """
+                SELECT * FROM memory
+                WHERE user_id = ? AND is_active = TRUE AND resolution_status = 'OPEN'
+                """ + (overdueOnly ? " AND due_at IS NOT NULL AND due_at < NOW()" : "") + """
+                 ORDER BY due_at ASC NULLS LAST, importance DESC, created_at DESC
+                 LIMIT ?
+                """;
+        return jdbc.query(sql, (rs, rowNum) -> mapRow(rs), userId, limit);
+    }
+
+    /** Hard-deletes a memory (its source links cascade). Returns true if a row was removed. */
+    public boolean delete(UUID id, UUID userId) {
+        return jdbc.update("DELETE FROM memory WHERE id = ? AND user_id = ?", id, userId) > 0;
+    }
+
+    static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public List<MemoryRecord> listBySession(UUID sessionId, UUID userId) {
@@ -101,13 +127,18 @@ public class MemoryRepository {
         ResolutionStatus status = request.resolutionStatus() == null
                 ? current.resolutionStatus() : request.resolutionStatus();
         boolean active = request.active() == null ? current.active() : request.active();
+        java.math.BigDecimal importance = request.importance() == null ? current.importance() : request.importance();
+        Instant dueAt = Boolean.TRUE.equals(request.clearDueAt()) ? null
+                : request.dueAt() == null ? current.dueAt() : request.dueAt();
         if (title.isBlank()) throw new IllegalArgumentException("Memory title must not be blank");
         if (content.isBlank()) throw new IllegalArgumentException("Memory content must not be blank");
         jdbc.update("""
                 UPDATE memory
-                SET title = ?, content = ?, resolution_status = ?, is_active = ?, updated_at = NOW()
+                SET title = ?, content = ?, resolution_status = ?, is_active = ?,
+                    importance = ?, due_at = ?, updated_at = NOW()
                 WHERE id = ? AND user_id = ?
-                """, title, content, status.name(), active, id, userId);
+                """, title, content, status.name(), active, importance,
+                dueAt == null ? null : Timestamp.from(dueAt), id, userId);
     }
 
     public void deleteBySession(UUID sessionId, UUID userId) {

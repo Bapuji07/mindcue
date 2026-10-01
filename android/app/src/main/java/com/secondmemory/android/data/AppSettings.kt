@@ -67,6 +67,9 @@ object AppSettings {
             .putBoolean(PENDING_UPLOADED, false).apply()
     }
 
+    /** Audio path of a recording whose processing has not finished successfully, if any. */
+    fun pendingAudio(context: Context): String? = prefs(context).getString(PENDING_AUDIO, null)
+
     fun pendingUploaded(context: Context): Boolean = prefs(context).getBoolean(PENDING_UPLOADED, false)
     fun markPendingUploaded(context: Context) = prefs(context).edit().putBoolean(PENDING_UPLOADED, true).apply()
     fun clearPending(context: Context) = prefs(context).edit().remove(PENDING_SESSION)

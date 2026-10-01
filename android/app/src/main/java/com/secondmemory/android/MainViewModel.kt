@@ -6,18 +6,27 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.secondmemory.android.data.AppSettings
 import com.secondmemory.android.data.HistoryUiState
+import com.secondmemory.android.data.MemoriesUiState
+import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
 import com.secondmemory.android.network.LoginResult
 import com.secondmemory.android.recording.MemoryRecordingService
 import com.secondmemory.android.state.MemoryState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import com.secondmemory.android.state.MemoryUiState
 import kotlinx.coroutines.launch
+import java.io.File
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.concurrent.ConcurrentHashMap
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<MemoryUiState> = MemoryState.state
@@ -32,7 +41,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableUsername = MutableStateFlow(AppSettings.username(application))
     val username: StateFlow<String?> = mutableUsername.asStateFlow()
 
-    init { MemoryState.restore(AppSettings.lastResult(application), AppSettings.lastAudio(application)) }
+    private val mutableMemories = MutableStateFlow(MemoriesUiState())
+    val memories: StateFlow<MemoriesUiState> = mutableMemories.asStateFlow()
+    private val pollJobs = ConcurrentHashMap<String, Job>()
+
+    init {
+        // A recording whose processing never finished (process killed, offline, backend error) stays
+        // retryable across app restarts as long as its audio file still exists.
+        val pending = AppSettings.pendingAudio(application)?.takeIf { File(it).exists() }
+        MemoryState.restore(AppSettings.lastResult(application), AppSettings.lastAudio(application), pending)
+    }
 
     private fun client(): BackendClient {
         val app = getApplication<Application>()
@@ -86,6 +104,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deactivate(context: Context) = MemoryRecordingService.deactivate(context)
     fun retry(context: Context, path: String) = MemoryRecordingService.retry(context, path)
+
+    /** Gives up on a failed recording: removes the local audio and clears the retry state. */
+    fun discardRecording() {
+        val app = getApplication<Application>()
+        val path = MemoryState.state.value.lastAudioPath
+        AppSettings.clearPending(app)
+        MemoryState.dismissError()
+        viewModelScope.launch(Dispatchers.IO) { path?.let { runCatching { File(it).delete() } } }
+    }
 
     fun ask(question: String) {
         if (question.isBlank()) return
@@ -157,18 +184,162 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun completeMemory(memoryId: String) = updateMemory(memoryId, status = "DONE")
-    fun dismissMemory(memoryId: String) = updateMemory(memoryId, active = false)
+    fun refreshMemories() {
+        loadHistory()
+        loadCommitments()
+    }
 
-    private fun updateMemory(memoryId: String, status: String? = null, active: Boolean? = null) {
-        mutateHistory {
-            val updated = client().updateMemory(memoryId, status, active)
-            mutableHistory.update { state ->
-                val current = state.selected ?: return@update state
-                val items = if (active == false) current.memories.filterNot { it.id == memoryId }
-                else current.memories.map { if (it.id == memoryId) updated else it }
-                state.copy(selected = current.copy(memories = items))
+    fun loadCommitments() {
+        val overdue = mutableMemories.value.overdueOnly
+        mutableMemories.update { it.copy(commitmentsLoading = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().openMemories(overdue) }
+                .onSuccess { items ->
+                    mutableMemories.update {
+                        if (it.overdueOnly == overdue) it.copy(commitmentsLoading = false, commitments = items) else it
+                    }
+                }
+                .onFailure { error -> memoriesFailure(error, "Could not load commitments") }
+        }
+    }
+
+    fun setOverdueOnly(value: Boolean) {
+        mutableMemories.update { it.copy(overdueOnly = value) }
+        loadCommitments()
+    }
+
+    fun searchMemories(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            clearSearch()
+            return
+        }
+        mutableMemories.update { it.copy(searchQuery = trimmed, searching = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().searchMemories(trimmed) }
+                .onSuccess { results ->
+                    mutableMemories.update {
+                        if (it.searchQuery == trimmed) it.copy(searching = false, searchResults = results) else it
+                    }
+                }
+                .onFailure { error -> memoriesFailure(error, "Could not search memories") }
+        }
+    }
+
+    fun clearSearch() = mutableMemories.update { it.copy(searchQuery = "", searchResults = null, searching = false) }
+
+    fun completeMemory(memoryId: String) = memoryOperation(memoryId) { updateMemory(memoryId, status = "DONE") }
+
+    fun removeMemory(memoryId: String) = memoryOperation(memoryId) { deleteMemory(memoryId); null }
+
+    /** Moves the due date [days] from now, or clears it when [days] is null. */
+    fun rescheduleMemory(memoryId: String, days: Long?) = memoryOperation(memoryId, reloadCommitments = true) {
+        if (days == null) updateMemory(memoryId, clearDueAt = true)
+        else updateMemory(memoryId, dueAt = Instant.now().plus(days, ChronoUnit.DAYS).toString())
+    }
+
+    /** Runs a memory change on the server and mirrors it into every list that shows the memory. */
+    private fun memoryOperation(
+        memoryId: String,
+        reloadCommitments: Boolean = false,
+        operation: BackendClient.() -> MemoryItem?
+    ) {
+        mutableMemories.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().operation() }
+                .onSuccess { updated ->
+                    applyMemoryChange(memoryId, updated)
+                    if (reloadCommitments) loadCommitments()
+                }
+                .onFailure { error -> memoriesFailure(error, "Could not update memory") }
+        }
+    }
+
+    /** [updated] null means the memory was deleted. */
+    private fun applyMemoryChange(memoryId: String, updated: MemoryItem?) {
+        mutableMemories.update { state ->
+            state.copy(
+                busy = false,
+                commitments = state.commitments.mapNotNull { memory ->
+                    if (memory.id != memoryId) memory else updated?.takeIf { it.resolutionStatus == "OPEN" }
+                },
+                searchResults = state.searchResults?.mapNotNull { memory ->
+                    if (memory.id != memoryId) memory else updated
+                }
+            )
+        }
+        mutableHistory.update { history ->
+            val current = history.selected ?: return@update history
+            history.copy(selected = current.copy(memories = current.memories.mapNotNull { memory ->
+                if (memory.id != memoryId) memory else updated
+            }))
+        }
+    }
+
+    private fun memoriesFailure(error: Throwable, fallback: String) {
+        if (error is AuthException) handleAuthFailure()
+        mutableMemories.update {
+            it.copy(
+                busy = false, commitmentsLoading = false, searching = false,
+                error = error.message ?: fallback
+            )
+        }
+    }
+
+    /** Re-runs server-side processing for a failed or stuck conversation and follows it to the end. */
+    fun retrySession(sessionId: String) {
+        mutableHistory.update { it.copy(mutating = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().startProcessing(sessionId) }
+                .onSuccess {
+                    setSessionProcessing(sessionId)
+                    mutableHistory.update { it.copy(mutating = false) }
+                    pollSession(sessionId)
+                }
+                .onFailure { error ->
+                    if (error is AuthException) handleAuthFailure()
+                    mutableHistory.update {
+                        it.copy(mutating = false, error = error.message ?: "Could not retry processing")
+                    }
+                }
+        }
+    }
+
+    private fun setSessionProcessing(sessionId: String) = mutableHistory.update { history ->
+        val now = Instant.now().toString()
+        history.copy(
+            sessions = history.sessions.map {
+                if (it.id == sessionId) it.copy(status = "PROCESSING", errorMessage = null, updatedAt = now) else it
+            },
+            selected = history.selected?.let { detail ->
+                if (detail.session.id != sessionId) detail
+                else detail.copy(session = detail.session.copy(status = "PROCESSING", errorMessage = null, updatedAt = now))
             }
+        )
+    }
+
+    private fun pollSession(sessionId: String) {
+        pollJobs.remove(sessionId)?.cancel()
+        pollJobs[sessionId] = viewModelScope.launch(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + 10 * 60_000L
+            var polls = 0
+            while (isActive && System.currentTimeMillis() < deadline) {
+                delay(4_000)
+                polls++
+                val detail = runCatching { client().sessionDetail(sessionId) }.getOrNull() ?: continue
+                val status = detail.session.status
+                // The server flips the status asynchronously, so ignore a FAILED seen right after the
+                // retry started; it is the old value, not a new failure.
+                if (status == "FAILED" && polls < 2) continue
+                mutableHistory.update { history ->
+                    history.copy(
+                        sessions = history.sessions.map { if (it.id == sessionId) detail.session else it },
+                        selected = history.selected?.let { if (it.session.id == sessionId) detail else it }
+                    )
+                }
+                if (status == "COMPLETED" || status == "FAILED") break
+            }
+            pollJobs.remove(sessionId)
         }
     }
 

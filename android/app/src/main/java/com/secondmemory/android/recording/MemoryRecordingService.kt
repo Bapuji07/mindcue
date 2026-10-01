@@ -106,7 +106,9 @@ class MemoryRecordingService : Service() {
         } catch (ex: RuntimeException) {
             recorder?.release(); recorder = null
             stopForeground(STOP_FOREGROUND_REMOVE)
-            MemoryState.failure("The recording was too short or could not be saved. Activate Memory and try again.", file.absolutePath)
+            // The file is unusable, so don't offer "Retry processing" for it.
+            runCatching { file.delete() }
+            MemoryState.failure("The recording was too short or could not be saved. Activate Memory and try again.", null)
             stopSelf()
         }
     }

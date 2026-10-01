@@ -6,10 +6,12 @@ import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.ResultJson
 import com.secondmemory.android.data.ConversationDetail
 import com.secondmemory.android.data.ConversationSession
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -125,15 +127,39 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         request("DELETE", "api/v1/memory/sessions/$sessionId")
     }
 
-    fun updateMemory(memoryId: String, status: String? = null, active: Boolean? = null): MemoryItem {
+    /** Open commitments, soonest due first. */
+    fun openMemories(overdueOnly: Boolean): List<MemoryItem> =
+        memoriesFrom(requestArray("api/v1/memory/memories/open?overdue=$overdueOnly&limit=100"))
+
+    fun searchMemories(query: String): List<MemoryItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        return memoriesFrom(requestArray("api/v1/memory/memories?q=$encoded&limit=50"))
+    }
+
+    fun deleteMemory(memoryId: String) {
+        request("DELETE", "api/v1/memory/memories/$memoryId")
+    }
+
+    fun updateMemory(
+        memoryId: String,
+        status: String? = null,
+        active: Boolean? = null,
+        dueAt: String? = null,
+        clearDueAt: Boolean = false
+    ): MemoryItem {
         val body = JSONObject().apply {
             status?.let { put("resolutionStatus", it) }
             active?.let { put("active", it) }
+            dueAt?.let { put("dueAt", it) }
+            if (clearDueAt) put("clearDueAt", true)
         }
         return ResultJson.memoryFromJson(
             request("PATCH", "api/v1/memory/memories/$memoryId", body)
         )
     }
+
+    private fun memoriesFrom(array: JSONArray) =
+        List(array.length()) { ResultJson.memoryFromJson(array.getJSONObject(it)) }
 
     private fun sessionFromJson(json: JSONObject) = ConversationSession(
         id = json.getString("id"),
@@ -142,11 +168,22 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         startedAt = json.optString("startedAt"),
         durationSeconds = if (json.isNull("durationSeconds")) null else json.optInt("durationSeconds"),
         summary = if (json.isNull("summary")) null else json.optString("summary").takeIf { it.isNotBlank() },
-        errorMessage = if (json.isNull("errorMessage")) null else json.optString("errorMessage").takeIf { it.isNotBlank() }
+        errorMessage = if (json.isNull("errorMessage")) null else json.optString("errorMessage").takeIf { it.isNotBlank() },
+        updatedAt = if (json.isNull("updatedAt")) null else json.optString("updatedAt").takeIf { it.isNotBlank() }
     )
 
     private fun request(method: String, path: String, body: JSONObject? = null): JSONObject {
-        val connection = connection(path).apply {
+        val raw = readBody(open(method, path, body))
+        return if (raw.isBlank()) JSONObject() else JSONObject(raw)
+    }
+
+    private fun requestArray(path: String): JSONArray {
+        val raw = readBody(open("GET", path, null))
+        return if (raw.isBlank()) JSONArray() else JSONArray(raw)
+    }
+
+    private fun open(method: String, path: String, body: JSONObject?): HttpURLConnection =
+        connection(path).apply {
             requestMethod = method
             if (body != null) {
                 doOutput = true
@@ -154,8 +191,6 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
                 outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
             }
         }
-        return readResponse(connection)
-    }
 
     private fun connection(path: String): HttpURLConnection {
         val target = base.resolve(path)
@@ -172,6 +207,11 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
     }
 
     private fun readResponse(connection: HttpURLConnection): JSONObject {
+        val raw = readBody(connection)
+        return if (raw.isBlank()) JSONObject() else JSONObject(raw)
+    }
+
+    private fun readBody(connection: HttpURLConnection): String {
         return try {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
@@ -182,7 +222,7 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
                 if (code == 401) throw AuthException(friendly)
                 throw BackendException(friendly)
             }
-            if (raw.isBlank()) JSONObject() else JSONObject(raw)
+            raw
         } finally {
             connection.disconnect()
         }

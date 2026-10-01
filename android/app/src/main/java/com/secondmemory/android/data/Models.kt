@@ -33,7 +33,8 @@ data class ConversationSession(
     val startedAt: String,
     val durationSeconds: Int?,
     val summary: String?,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val updatedAt: String? = null
 )
 
 data class ConversationDetail(
@@ -48,4 +49,16 @@ data class HistoryUiState(
     val selected: ConversationDetail? = null,
     val error: String? = null,
     val mutating: Boolean = false
+)
+
+/** Cross-conversation memory views: open commitments and text search. */
+data class MemoriesUiState(
+    val commitments: List<MemoryItem> = emptyList(),
+    val commitmentsLoading: Boolean = false,
+    val overdueOnly: Boolean = false,
+    val searchQuery: String = "",
+    val searchResults: List<MemoryItem>? = null,
+    val searching: Boolean = false,
+    val busy: Boolean = false,
+    val error: String? = null
 )

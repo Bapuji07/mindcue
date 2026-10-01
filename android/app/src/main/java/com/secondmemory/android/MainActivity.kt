@@ -25,6 +25,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +42,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Handshake
@@ -65,6 +70,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,11 +78,17 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.secondmemory.android.data.MemoriesUiState
 import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.ConversationSession
 import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryUiState
+import java.time.Duration
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -129,6 +141,8 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val username by vm.username.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
+    val memories by vm.memories.collectAsStateWithLifecycle()
+    val memoryActions = remember(vm) { MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory) }
     val context = LocalContext.current
     var pageName by rememberSaveable { mutableStateOf(AppPage.HOME.name) }
     var permissionError by remember { mutableStateOf<String?>(null) }
@@ -192,12 +206,14 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
             page == AppPage.HOME -> HomeScreen(
                 Modifier.padding(padding), state, permissionError, activate,
                 { state.lastAudioPath?.let { vm.retry(context, it) } },
+                vm::discardRecording,
                 { pageName = AppPage.MEMORIES.name }
             )
             page == AppPage.MEMORIES -> MemoriesScreen(
-                Modifier.padding(padding), state, history, vm::ask, vm::loadHistory,
+                Modifier.padding(padding), state, history, memories, memoryActions,
+                vm::ask, vm::refreshMemories, vm::searchMemories, vm::clearSearch, vm::setOverdueOnly,
                 vm::openConversation, vm::closeConversation, vm::renameConversation,
-                vm::deleteConversation, vm::completeMemory, vm::dismissMemory
+                vm::deleteConversation, vm::retrySession
             )
             else -> SettingsScreen(Modifier.padding(padding), username, vm::logout)
         }
@@ -290,8 +306,21 @@ private fun HomeScreen(
     permissionError: String?,
     onActivate: () -> Unit,
     onRetry: () -> Unit,
+    onDiscard: () -> Unit,
     onOpenMemories: () -> Unit
 ) {
+    var confirmDiscard by rememberSaveable { mutableStateOf(false) }
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard recording?") },
+            text = { Text("The unprocessed recording is deleted from this phone and cannot be recovered.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; onDiscard() }) { Text("Discard", color = ErrorRed) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Cancel") } }
+        )
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -345,6 +374,9 @@ private fun HomeScreen(
                     if (state.lastAudioPath != null) {
                         Spacer(Modifier.height(12.dp))
                         Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text("Retry processing") }
+                        TextButton(onClick = { confirmDiscard = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Discard recording", color = ErrorRed)
+                        }
                     }
                 }
             }
@@ -433,25 +465,33 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
     }
 }
 
+private class MemoryActions(
+    val onDone: (String) -> Unit,
+    val onDelete: (String) -> Unit,
+    val onReschedule: (String, Long?) -> Unit
+)
+
 @Composable
 private fun MemoriesScreen(
     modifier: Modifier,
     state: MemoryUiState,
     history: HistoryUiState,
+    memories: MemoriesUiState,
+    actions: MemoryActions,
     onAsk: (String) -> Unit,
     onRefresh: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearSearch: () -> Unit,
+    onOverdueChange: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
     onClose: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onCompleteMemory: (String) -> Unit,
-    onDismissMemory: (String) -> Unit
+    onRetrySession: (String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     history.selected?.let {
-        ConversationDetailScreen(
-            modifier, history, onClose, onRename, onDelete, onCompleteMemory, onDismissMemory
-        )
+        ConversationDetailScreen(modifier, history, memories, actions, onClose, onRename, onDelete, onRetrySession)
         return
     }
     LazyColumn(
@@ -460,6 +500,36 @@ private fun MemoriesScreen(
     ) {
         item { Spacer(Modifier.height(4.dp)) }
         item { AskMemoryCard(state, onAsk) }
+        item { SearchMemoriesCard(memories, onSearch, onClearSearch) }
+        if (memories.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        memories.error?.let { item { InlineMessage(it, ErrorRed) } }
+        memories.searchResults?.let { results ->
+            item { SectionTitle("Search results", results.size.toString()) }
+            if (results.isEmpty()) {
+                item { EmptyCard("No memories match “${memories.searchQuery}”.", Icons.Outlined.Search) }
+            } else {
+                items(results, key = { "search-${it.id ?: it.hashCode()}" }) { ActionableMemoryCard(it, actions) }
+            }
+        }
+        item { SectionTitle("Open commitments", memories.commitments.size.toString()) }
+        item {
+            FilterChip(
+                selected = memories.overdueOnly, onClick = { onOverdueChange(!memories.overdueOnly) },
+                label = { Text("Overdue only") }
+            )
+        }
+        if (memories.commitmentsLoading && memories.commitments.isEmpty()) {
+            item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+        } else if (memories.commitments.isEmpty()) {
+            item {
+                EmptyCard(
+                    if (memories.overdueOnly) "Nothing is overdue." else "No open tasks or promises right now.",
+                    Icons.Outlined.CheckCircle
+                )
+            }
+        } else {
+            items(memories.commitments, key = { "open-${it.id ?: it.hashCode()}" }) { ActionableMemoryCard(it, actions) }
+        }
         item { SectionTitle("Conversation history", history.sessions.size.toString()) }
         if (history.loading && history.sessions.isEmpty()) {
             item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
@@ -468,14 +538,52 @@ private fun MemoriesScreen(
         if (!history.loading && history.sessions.isEmpty()) {
             item { EmptyCard("Your processed conversations will appear here after you deactivate Memory.", Icons.Outlined.History) }
         } else {
-            items(history.sessions, key = { it.id }) { session -> ConversationCard(session) { onOpen(session.id) } }
+            items(history.sessions, key = { "session-${it.id}" }) { session ->
+                val retry: (() -> Unit)? = if (canRetry(session)) ({ onRetrySession(session.id) }) else null
+                ConversationCard(session, retry) { onOpen(session.id) }
+            }
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
 @Composable
-private fun ConversationCard(session: ConversationSession, onClick: () -> Unit) {
+private fun SearchMemoriesCard(state: MemoriesUiState, onSearch: (String) -> Unit, onClear: () -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    SurfaceCard {
+        Text("Search memories", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text("Find memories by keyword.", color = Muted)
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = query, onValueChange = { query = it },
+            placeholder = { Text("e.g. invoice, doctor") },
+            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = ""; onClear() }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Clear search")
+                    }
+                }
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { onSearch(query) }, enabled = query.isNotBlank() && !state.searching,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (state.searching) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+            else Text("Search")
+        }
+    }
+}
+
+@Composable
+private fun ConversationCard(session: ConversationSession, onRetry: (() -> Unit)?, onClick: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(20.dp),
@@ -503,13 +611,26 @@ private fun ConversationCard(session: ConversationSession, onClick: () -> Unit) 
                 Spacer(Modifier.height(9.dp))
                 Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            if (session.status.equals("FAILED", ignoreCase = true)) {
+                session.errorMessage?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = ErrorRed, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            onRetry?.let {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = it, contentPadding = PaddingValues(0.dp)) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp)); Text("Retry processing")
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun StatusPill(status: String) {
-    val label = status.lowercase().replaceFirstChar { it.uppercase() }
+    val label = status.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
     val color = when (status.uppercase()) {
         "COMPLETED", "TRANSCRIPTION_COMPLETE" -> Evergreen
         "FAILED" -> ErrorRed
@@ -526,11 +647,12 @@ private fun StatusPill(status: String) {
 private fun ConversationDetailScreen(
     modifier: Modifier,
     history: HistoryUiState,
+    memories: MemoriesUiState,
+    actions: MemoryActions,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onCompleteMemory: (String) -> Unit,
-    onDismissMemory: (String) -> Unit
+    onRetry: (String) -> Unit
 ) {
     val detail = history.selected ?: return
     var title by rememberSaveable(detail.session.id) { mutableStateOf(detail.session.title) }
@@ -583,7 +705,28 @@ private fun ConversationDetailScreen(
             }
         }
         history.error?.let { item { InlineMessage(it, ErrorRed) } }
-        if (history.mutating) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        memories.error?.let { item { InlineMessage(it, ErrorRed) } }
+        if (history.mutating || memories.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (canRetry(detail.session)) {
+            item {
+                SurfaceCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (detail.session.status.equals("FAILED", true)) "Processing failed" else "Processing seems stuck",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    detail.session.errorMessage?.let { Spacer(Modifier.height(6.dp)); Text(it, color = Muted) }
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { onRetry(detail.session.id) }, enabled = !history.mutating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Retry processing") }
+                }
+            }
+        }
         item {
             SectionTitle("Summary")
             Spacer(Modifier.height(8.dp))
@@ -593,12 +736,8 @@ private fun ConversationDetailScreen(
         if (detail.memories.isEmpty()) {
             item { EmptyCard("No active memories remain in this conversation.", Icons.Outlined.AutoAwesome) }
         } else {
-            items(detail.memories, key = { it.id ?: "${it.type}-${it.title}" }) { memory ->
-                MemoryCard(
-                    memory,
-                    onDone = memory.id?.takeIf { memory.resolutionStatus == "OPEN" }?.let { id -> { onCompleteMemory(id) } },
-                    onDismiss = memory.id?.let { id -> { onDismissMemory(id) } }
-                )
+            items(detail.memories, key = { "memory-${it.id ?: "${it.type}-${it.title}"}" }) { memory ->
+                ActionableMemoryCard(memory, actions)
             }
         }
         item {
@@ -705,7 +844,41 @@ private fun memoryTypeIcon(type: String): ImageVector = when (type.uppercase()) 
 }
 
 @Composable
-private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismiss: (() -> Unit)? = null) {
+private fun ActionableMemoryCard(memory: MemoryItem, actions: MemoryActions) {
+    val id = memory.id
+    val open = memory.resolutionStatus == "OPEN"
+    MemoryCard(
+        memory,
+        onDone = if (id != null && open) ({ actions.onDone(id) }) else null,
+        onDelete = if (id != null) ({ actions.onDelete(id) }) else null,
+        onReschedule = if (id != null && open) ({ days: Long? -> actions.onReschedule(id, days) }) else null
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MemoryCard(
+    memory: MemoryItem,
+    onDone: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    onReschedule: ((Long?) -> Unit)? = null
+) {
+    var confirmDelete by rememberSaveable { mutableStateOf(false) }
+    var dueMenuOpen by remember { mutableStateOf(false) }
+    val overdue = isOverdue(memory)
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete memory?") },
+            text = { Text("This permanently removes this memory. The conversation and its transcript stay.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("Delete", color = ErrorRed) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
+        )
+    }
+
     SurfaceCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(28.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
@@ -713,6 +886,10 @@ private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismi
             }
             Spacer(Modifier.width(8.dp))
             Text(memory.type, color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            if (overdue) {
+                Spacer(Modifier.width(10.dp))
+                Text("Overdue", color = ErrorRed, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+            }
         }
         Spacer(Modifier.height(9.dp))
         Text(memory.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
@@ -720,23 +897,50 @@ private fun MemoryCard(memory: MemoryItem, onDone: (() -> Unit)? = null, onDismi
         Text(memory.content)
         if (memory.dueAt != null || memory.confidence != null) {
             Spacer(Modifier.height(12.dp)); HorizontalDivider(); Spacer(Modifier.height(9.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                memory.dueAt?.let { Text("Due ${it.replace('T', ' ').take(16)}", style = MaterialTheme.typography.labelMedium) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                memory.dueAt?.let {
+                    Text(
+                        "Due ${formatDue(it)}", style = MaterialTheme.typography.labelMedium,
+                        color = if (overdue) ErrorRed else MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 memory.confidence?.let {
                     Text("${String.format(Locale.US, "%.0f", it * 100)}% confidence", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
-        if (onDone != null || onDismiss != null) {
+        if (onDone != null || onDelete != null || onReschedule != null) {
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // FlowRow wraps the buttons onto a second line on narrow screens instead of overflowing.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 onDone?.let {
                     OutlinedButton(onClick = it) {
                         Icon(Icons.Outlined.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp)); Text("Mark done")
                     }
                 }
-                onDismiss?.let { TextButton(onClick = it) { Text("Dismiss") } }
+                onReschedule?.let { reschedule ->
+                    Box {
+                        TextButton(onClick = { dueMenuOpen = true }) {
+                            Text(if (memory.dueAt == null) "Set due" else "Reschedule")
+                        }
+                        DropdownMenu(expanded = dueMenuOpen, onDismissRequest = { dueMenuOpen = false }) {
+                            listOf("Tomorrow" to 1L, "In 3 days" to 3L, "In a week" to 7L).forEach { (label, days) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = { dueMenuOpen = false; reschedule(days) }
+                                )
+                            }
+                            if (memory.dueAt != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Clear due date") },
+                                    onClick = { dueMenuOpen = false; reschedule(null) }
+                                )
+                            }
+                        }
+                    }
+                }
+                onDelete?.let { TextButton(onClick = { confirmDelete = true }) { Text("Delete", color = ErrorRed) } }
             }
         }
     }
@@ -773,24 +977,27 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
             }
         }
         AnimatedVisibility(state.askResult != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-        state.askResult?.let { result ->
-            Spacer(Modifier.height(16.dp)); HorizontalDivider(); Spacer(Modifier.height(14.dp))
-            Text(result.answer, fontWeight = FontWeight.Medium)
-            if (result.sources.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text("Sources", color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                result.sources.forEach { source ->
-                    Spacer(Modifier.height(8.dp))
-                    Text(source.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    source.evidence.firstOrNull()?.let {
-                        Text(
-                            "“$it”", style = MaterialTheme.typography.bodySmall, color = Muted,
-                            maxLines = 3, overflow = TextOverflow.Ellipsis
-                        )
+            // AnimatedVisibility lays its children out on top of each other, so they must share one Column.
+            Column(Modifier.fillMaxWidth()) {
+                state.askResult?.let { result ->
+                    Spacer(Modifier.height(16.dp)); HorizontalDivider(); Spacer(Modifier.height(14.dp))
+                    Text(result.answer, fontWeight = FontWeight.Medium)
+                    if (result.sources.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Sources", color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                        result.sources.forEach { source ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(source.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            source.evidence.firstOrNull()?.let {
+                                Text(
+                                    "“$it”", style = MaterialTheme.typography.bodySmall, color = Muted,
+                                    maxLines = 3, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
         }
         state.askError?.let {
             Spacer(Modifier.height(10.dp)); Text(it, color = ErrorRed, style = MaterialTheme.typography.bodySmall)
@@ -814,5 +1021,28 @@ private fun InlineMessage(message: String, color: Color) {
 
 private fun formatDuration(seconds: Long): String =
     "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
+
+private val InProgressStatuses = setOf("AUDIO_RECEIVED", "TRANSCRIBING", "TRANSCRIPTION_COMPLETE", "PROCESSING")
+private const val STALE_AFTER_MINUTES = 10L
+
+/** Failed conversations, and in-progress ones that have not moved for a while (e.g. server restarted). */
+private fun canRetry(session: ConversationSession): Boolean {
+    val status = session.status.uppercase()
+    if (status == "FAILED") return true
+    if (status !in InProgressStatuses) return false
+    val updated = parseInstant(session.updatedAt) ?: return false
+    return Duration.between(updated, Instant.now()).toMinutes() >= STALE_AFTER_MINUTES
+}
+
+private fun parseInstant(value: String?): Instant? =
+    value?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
+
+private fun isOverdue(memory: MemoryItem): Boolean =
+    memory.resolutionStatus == "OPEN" && parseInstant(memory.dueAt)?.isBefore(Instant.now()) == true
+
+private val DueFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+
+private fun formatDue(value: String): String =
+    parseInstant(value)?.let { DueFormat.format(it) } ?: value.replace('T', ' ').take(16)
 
 private fun formatDate(value: String): String = value.replace('T', ' ').take(16).ifBlank { "Unknown date" }

@@ -25,15 +25,36 @@ object MemoryState {
     private val mutable = MutableStateFlow(MemoryUiState())
     val state = mutable.asStateFlow()
 
-    fun restore(result: SessionResult?, audioPath: String?) {
-        if (mutable.value.mode == MemoryMode.INACTIVE && result != null) {
-            mutable.value = MemoryUiState(
+    /**
+     * Rebuilds UI state after the process was killed. An unfinished recording takes priority over
+     * the last result so the user can retry it, but the last result is kept for display.
+     */
+    fun restore(result: SessionResult?, audioPath: String?, pendingPath: String? = null) {
+        if (mutable.value.mode != MemoryMode.INACTIVE) return
+        when {
+            pendingPath != null -> mutable.value = MemoryUiState(
+                mode = MemoryMode.ERROR,
+                status = "Memory needs attention",
+                result = result,
+                error = "A recording from earlier hasn't finished processing. Retry to upload and process it.",
+                lastAudioPath = pendingPath
+            )
+            result != null -> mutable.value = MemoryUiState(
                 mode = MemoryMode.READY,
                 status = "Memory ready",
                 result = result,
                 lastAudioPath = audioPath
             )
         }
+    }
+
+    /** Clears a failed recording after the user discards it. */
+    fun dismissError() = mutable.update {
+        it.copy(
+            mode = if (it.result != null) MemoryMode.READY else MemoryMode.INACTIVE,
+            status = if (it.result != null) "Memory ready" else "Memory is inactive",
+            error = null, lastAudioPath = null
+        )
     }
 
     fun active(elapsed: Long = 0) = mutable.update {

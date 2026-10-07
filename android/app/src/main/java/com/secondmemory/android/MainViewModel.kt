@@ -20,7 +20,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -32,6 +35,12 @@ import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * A one-off message for the snackbar. [onUndo] adds an Undo action; [onTimeout] runs when the
+ * message goes away without Undo (used to commit a delete only after the undo window).
+ */
+class UserMessage(val text: String, val onUndo: (() -> Unit)? = null, val onTimeout: (() -> Unit)? = null)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<MemoryUiState> = MemoryState.state
@@ -52,6 +61,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableMemories = MutableStateFlow(MemoriesUiState())
     val memories: StateFlow<MemoriesUiState> = mutableMemories.asStateFlow()
     private val pollJobs = ConcurrentHashMap<String, Job>()
+    private var searchJob: Job? = null
+
+    private val mutableMessages = MutableSharedFlow<UserMessage>(extraBufferCapacity = 8)
+    val messages: SharedFlow<UserMessage> = mutableMessages.asSharedFlow()
 
     init {
         // A recording whose processing never finished (process killed, offline, backend error) stays
@@ -218,11 +231,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshMemories() {
-        loadHistory()
-        loadCommitments()
-    }
-
     fun loadCommitments() {
         val overdue = mutableMemories.value.overdueOnly
         mutableMemories.update { it.copy(commitmentsLoading = true, error = null) }
@@ -242,32 +250,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadCommitments()
     }
 
-    fun searchMemories(query: String) {
+    /** Keyword search as the user types (debounced); an answer from a previous question is cleared. */
+    fun onSearchQueryChange(query: String) {
+        // The answer belongs to the text it was asked with; re-running the same search keeps it.
+        if (query != mutableMemories.value.searchQuery) MemoryState.clearAnswer()
+        mutableMemories.update { it.copy(searchQuery = query, error = null) }
+        searchJob?.cancel()
         val trimmed = query.trim()
-        if (trimmed.isEmpty()) {
-            clearSearch()
+        if (trimmed.length < 2) {
+            mutableMemories.update { it.copy(searchResults = null, searching = false) }
             return
         }
-        mutableMemories.update { it.copy(searchQuery = trimmed, searching = true, error = null) }
-        viewModelScope.launch(Dispatchers.IO) {
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(350)
+            mutableMemories.update { it.copy(searching = true) }
             runCatching { client().searchMemories(trimmed) }
                 .onSuccess { results ->
                     mutableMemories.update {
-                        if (it.searchQuery == trimmed) it.copy(searching = false, searchResults = results) else it
+                        if (it.searchQuery.trim() == trimmed) it.copy(searching = false, searchResults = results) else it
                     }
                 }
                 .onFailure { error -> memoriesFailure(error, "Could not search memories") }
         }
     }
 
-    fun clearSearch() = mutableMemories.update { it.copy(searchQuery = "", searchResults = null, searching = false) }
+    fun clearSearch() {
+        searchJob?.cancel()
+        MemoryState.clearAnswer()
+        mutableMemories.update { it.copy(searchQuery = "", searchResults = null, searching = false) }
+    }
 
-    fun completeMemory(memoryId: String) = memoryOperation(memoryId) { updateMemory(memoryId, status = "DONE") }
+    fun completeMemory(memoryId: String) = memoryOperation(
+        memoryId, onSuccess = { notify(UserMessage("Marked as done", onUndo = { reopenMemory(memoryId) })) }
+    ) { updateMemory(memoryId, status = "DONE") }
 
-    fun removeMemory(memoryId: String) = memoryOperation(memoryId) { deleteMemory(memoryId); null }
+    private fun reopenMemory(memoryId: String) =
+        memoryOperation(memoryId, reloadCommitments = true) { updateMemory(memoryId, status = "OPEN") }
+
+    /**
+     * Hides the memory at once and deletes it on the server only after the Undo window passes,
+     * so an accidental delete can be taken back.
+     */
+    fun removeMemory(memoryId: String) {
+        applyMemoryChange(memoryId, null)
+        notify(UserMessage("Memory deleted", onUndo = ::reloadMemoryLists, onTimeout = { commitDelete(memoryId) }))
+    }
+
+    private fun commitDelete(memoryId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().deleteMemory(memoryId) }.onFailure { error ->
+                if (error is AuthException) handleAuthFailure()
+                notify(UserMessage(error.message ?: "Could not delete memory"))
+                reloadMemoryLists()
+            }
+        }
+    }
+
+    /** Re-reads every list a memory can appear in (after an undo or a failed change). */
+    private fun reloadMemoryLists() {
+        loadCommitments()
+        val query = mutableMemories.value.searchQuery
+        if (query.isNotBlank()) onSearchQueryChange(query)
+        mutableHistory.value.selected?.let { openConversation(it.session.id) }
+    }
+
+    private fun notify(message: UserMessage) {
+        mutableMessages.tryEmit(message)
+    }
 
     /** Moves the due date [days] from now, or clears it when [days] is null. */
-    fun rescheduleMemory(memoryId: String, days: Long?) = memoryOperation(memoryId, reloadCommitments = true) {
+    fun rescheduleMemory(memoryId: String, days: Long?) = memoryOperation(
+        memoryId, reloadCommitments = true,
+        onSuccess = { notify(UserMessage(if (days == null) "Due date cleared" else "Rescheduled")) }
+    ) {
         if (days == null) updateMemory(memoryId, clearDueAt = true)
         else updateMemory(memoryId, dueAt = Instant.now().plus(days, ChronoUnit.DAYS).toString())
     }
@@ -276,6 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun memoryOperation(
         memoryId: String,
         reloadCommitments: Boolean = false,
+        onSuccess: () -> Unit = {},
         operation: BackendClient.() -> MemoryItem?
     ) {
         mutableMemories.update { it.copy(busy = true, error = null) }
@@ -284,8 +340,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { updated ->
                     applyMemoryChange(memoryId, updated)
                     if (reloadCommitments) loadCommitments()
+                    onSuccess()
                 }
-                .onFailure { error -> memoriesFailure(error, "Could not update memory") }
+                .onFailure { error ->
+                    if (error is AuthException) handleAuthFailure()
+                    mutableMemories.update { it.copy(busy = false) }
+                    notify(UserMessage(error.message ?: "Could not update memory"))
+                }
         }
     }
 

@@ -28,14 +28,15 @@ object ResultJson {
         dueAt = json.optNullableString("dueAt"),
         importance = json.optNullableDouble("importance"),
         confidence = json.optNullableDouble("confidence"),
-        id = json.optNullableString("id")
+        id = json.optNullableString("id"),
+        sessionId = json.optNullableString("sessionId")
     )
 
     private fun memoryToJson(memory: MemoryItem) = JSONObject().apply {
         put("type", memory.type); put("title", memory.title); put("content", memory.content)
         put("resolutionStatus", memory.resolutionStatus); put("dueAt", memory.dueAt)
         put("importance", memory.importance); put("confidence", memory.confidence)
-        put("id", memory.id)
+        put("id", memory.id); put("sessionId", memory.sessionId)
     }
 
     private fun JSONObject.optNullableString(name: String): String? =

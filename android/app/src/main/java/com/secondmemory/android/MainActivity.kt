@@ -46,7 +46,9 @@ import androidx.compose.material.icons.automirrored.outlined.Rule
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -62,10 +64,13 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -78,6 +83,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -98,6 +104,7 @@ import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.ConversationSession
 import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryUiState
+import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -155,6 +162,7 @@ private val CardBorder: Color @Composable @ReadOnlyComposable get() = MaterialTh
 
 private enum class AppPage(val label: String, val outlineIcon: ImageVector, val filledIcon: ImageVector) {
     HOME("Home", Icons.Outlined.Home, Icons.Filled.Home),
+    TASKS("Tasks", Icons.Outlined.TaskAlt, Icons.Filled.TaskAlt),
     MEMORIES("Memories", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
     SETTINGS("Settings", Icons.Outlined.Settings, Icons.Filled.Settings)
 }
@@ -183,12 +191,41 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
     val history by vm.history.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
     val usage by vm.usage.collectAsStateWithLifecycle()
-    val memoryActions = remember(vm) { MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory) }
     val context = LocalContext.current
     var pageName by rememberSaveable { mutableStateOf(AppPage.HOME.name) }
     var permissionError by remember { mutableStateOf<String?>(null) }
-    val page = AppPage.valueOf(pageName)
-    LaunchedEffect(page) { if (page != AppPage.MEMORIES) vm.refreshUsage() }
+    var renaming by rememberSaveable { mutableStateOf(false) }
+    var confirmDeleteConversation by rememberSaveable { mutableStateOf(false) }
+    val page = runCatching { AppPage.valueOf(pageName) }.getOrDefault(AppPage.HOME)
+    LaunchedEffect(page) { if (page == AppPage.HOME || page == AppPage.SETTINGS) vm.refreshUsage() }
+
+    val openConversation: (String) -> Unit = { sessionId ->
+        vm.openConversation(sessionId)
+        pageName = AppPage.MEMORIES.name
+    }
+    val memoryActions = remember(vm) {
+        MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory, openConversation)
+    }
+
+    // Snackbar messages from the view model. A message's onTimeout also runs if the screen goes
+    // away mid-message, so a pending delete is never silently dropped.
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(vm) {
+        vm.messages.collect { message ->
+            launch {
+                var undone = false
+                try {
+                    undone = snackbar.showSnackbar(
+                        message.text,
+                        actionLabel = if (message.onUndo != null) "Undo" else null,
+                        duration = SnackbarDuration.Short
+                    ) == SnackbarResult.ActionPerformed
+                } finally {
+                    if (undone) message.onUndo?.invoke() else message.onTimeout?.invoke()
+                }
+            }
+        }
+    }
 
     val permissions = buildList {
         add(Manifest.permission.RECORD_AUDIO)
@@ -209,15 +246,38 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
         } else permissionLauncher.launch(permissions)
     }
     val focusMode = state.mode == MemoryMode.ACTIVE || state.mode == MemoryMode.PROCESSING
-    val inDetail = page == AppPage.MEMORIES && history.selected != null
+    val detail = history.selected
+    val inDetail = page == AppPage.MEMORIES && detail != null
 
     // System back: conversation detail -> list -> Home tab, then leave the app.
     BackHandler(enabled = !focusMode && (inDetail || page != AppPage.HOME)) {
         if (inDetail) vm.closeConversation() else pageName = AppPage.HOME.name
     }
 
+    if (detail != null && renaming) {
+        RenameDialog(
+            initial = detail.session.title,
+            onDismiss = { renaming = false },
+            onSave = { vm.renameConversation(it); renaming = false }
+        )
+    }
+    if (detail != null && confirmDeleteConversation) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteConversation = false },
+            title = { Text("Delete conversation?") },
+            text = { Text("This permanently removes its transcript and memories. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDeleteConversation = false; vm.deleteConversation() }) {
+                    Text("Delete", color = ErrorRed)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteConversation = false }) { Text("Cancel") } }
+        )
+    }
+
     Scaffold(
         containerColor = Canvas,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -234,6 +294,26 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                     if (inDetail && !focusMode) {
                         IconButton(onClick = vm::closeConversation) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
+                actions = {
+                    if (inDetail && !focusMode) {
+                        var menuOpen by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = "More options")
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { menuOpen = false; renaming = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete conversation", color = ErrorRed) },
+                                    onClick = { menuOpen = false; confirmDeleteConversation = true }
+                                )
+                            }
                         }
                     }
                 },
@@ -255,7 +335,7 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                             icon = {
                                 Icon(
                                     if (selected) destination.filledIcon else destination.outlineIcon,
-                                    contentDescription = destination.label
+                                    contentDescription = null
                                 )
                             },
                             label = { Text(destination.label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
@@ -277,17 +357,34 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                 content, state, usage, permissionError, activate,
                 { state.lastAudioPath?.let { vm.retry(context, it) } },
                 vm::discardRecording,
-                { pageName = AppPage.MEMORIES.name }
+                { state.result?.sessionId?.let(openConversation) ?: run { pageName = AppPage.MEMORIES.name } }
             )
+            page == AppPage.TASKS -> TasksScreen(content, memories, memoryActions, vm::loadCommitments, vm::setOverdueOnly)
             page == AppPage.MEMORIES -> MemoriesScreen(
                 content, state, history, memories, memoryActions,
-                vm::ask, vm::refreshMemories, vm::searchMemories, vm::clearSearch, vm::setOverdueOnly,
-                vm::openConversation, vm::renameConversation,
-                vm::deleteConversation, vm::retrySession
+                vm::ask, vm::loadHistory, vm::onSearchQueryChange, vm::clearSearch,
+                vm::openConversation, vm::retrySession
             )
             else -> SettingsScreen(content, username, usage, vm::logout)
         }
     }
+}
+
+@Composable
+private fun RenameDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var title by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename conversation") },
+        text = {
+            OutlinedTextField(
+                value = title, onValueChange = { title = it }, label = { Text("Title") },
+                singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(title.trim()) }, enabled = title.isNotBlank()) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -558,9 +655,70 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
 private class MemoryActions(
     val onDone: (String) -> Unit,
     val onDelete: (String) -> Unit,
-    val onReschedule: (String, Long?) -> Unit
+    val onReschedule: (String, Long?) -> Unit,
+    val onOpenConversation: (String) -> Unit
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TasksScreen(
+    modifier: Modifier,
+    memories: MemoriesUiState,
+    actions: MemoryActions,
+    onRefresh: () -> Unit,
+    onOverdueChange: (Boolean) -> Unit
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    PullToRefreshBox(
+        isRefreshing = memories.commitmentsLoading && memories.commitments.isNotEmpty(),
+        onRefresh = onRefresh,
+        modifier = modifier.fillMaxSize()
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectableChip("All open", selected = !memories.overdueOnly) { onOverdueChange(false) }
+                    SelectableChip("Overdue", selected = memories.overdueOnly) { onOverdueChange(true) }
+                }
+            }
+            memories.error?.let { item { InlineMessage(it, ErrorRed) } }
+            when {
+                memories.commitmentsLoading && memories.commitments.isEmpty() -> item { CenteredProgress() }
+                memories.commitments.isEmpty() -> item {
+                    EmptyCard(
+                        if (memories.overdueOnly) "Nothing is overdue. Nice work."
+                        else "You're all caught up. Tasks and promises from your conversations appear here.",
+                        Icons.Outlined.CheckCircle
+                    )
+                }
+                else -> items(memories.commitments, key = { "open-${it.id ?: it.hashCode()}" }) {
+                    ActionableMemoryCard(it, actions, showSource = true)
+                }
+            }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun SelectableChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected, onClick = onClick, label = { Text(label) },
+        leadingIcon = if (selected) {
+            { Icon(Icons.Filled.Done, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+        } else null
+    )
+}
+
+@Composable
+private fun CenteredProgress() {
+    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MemoriesScreen(
     modifier: Modifier,
@@ -570,103 +728,137 @@ private fun MemoriesScreen(
     actions: MemoryActions,
     onAsk: (String) -> Unit,
     onRefresh: () -> Unit,
-    onSearch: (String) -> Unit,
-    onClearSearch: () -> Unit,
-    onOverdueChange: (Boolean) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onClearQuery: () -> Unit,
     onOpen: (String) -> Unit,
-    onRename: (String) -> Unit,
-    onDelete: () -> Unit,
     onRetrySession: (String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
-    history.selected?.let {
-        ConversationDetailScreen(modifier, history, memories, actions, onRename, onDelete, onRetrySession)
+    if (history.selected != null) {
+        ConversationDetailScreen(modifier, history, memories, actions, onRetrySession)
         return
     }
-    LazyColumn(
-        modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+    val query = memories.searchQuery
+    PullToRefreshBox(
+        isRefreshing = history.loading && history.sessions.isNotEmpty(),
+        onRefresh = onRefresh,
+        modifier = modifier.fillMaxSize()
     ) {
-        item { Spacer(Modifier.height(4.dp)) }
-        item { AskMemoryCard(state, onAsk) }
-        item { SearchMemoriesCard(memories, onSearch, onClearSearch) }
-        if (memories.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        memories.error?.let { item { InlineMessage(it, ErrorRed) } }
-        memories.searchResults?.let { results ->
-            item { SectionTitle("Search results", results.size.toString()) }
-            if (results.isEmpty()) {
-                item { EmptyCard("No memories match “${memories.searchQuery}”.", Icons.Outlined.Search) }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item { Spacer(Modifier.height(4.dp)); SearchOrAskBar(query, onQueryChange, onClearQuery) }
+            if (query.isNotBlank()) {
+                item { AskCard(query, state, onAsk) }
+                val results = memories.searchResults
+                item { SectionTitle("Matching memories", results?.size?.toString()) }
+                memories.error?.let { item { InlineMessage(it, ErrorRed) } }
+                when {
+                    results == null && (memories.searching || query.trim().length >= 2) -> item { CenteredProgress() }
+                    results == null -> item { Text("Keep typing to search…", color = Muted) }
+                    results.isEmpty() -> item {
+                        EmptyCard("No memories mention “${query.trim()}”. Try asking instead.", Icons.Outlined.Search)
+                    }
+                    else -> items(results, key = { "search-${it.id ?: it.hashCode()}" }) {
+                        ActionableMemoryCard(it, actions, showSource = true)
+                    }
+                }
             } else {
-                items(results, key = { "search-${it.id ?: it.hashCode()}" }) { ActionableMemoryCard(it, actions) }
+                item { SectionTitle("Conversations", history.sessions.size.toString()) }
+                history.error?.let { item { InlineMessage(it, ErrorRed) } }
+                when {
+                    history.loading && history.sessions.isEmpty() -> item { CenteredProgress() }
+                    history.sessions.isEmpty() -> item {
+                        EmptyCard("Your conversations appear here after you record one on Home.", Icons.Outlined.History)
+                    }
+                    else -> items(history.sessions, key = { "session-${it.id}" }) { session ->
+                        val retry: (() -> Unit)? = if (canRetry(session)) ({ onRetrySession(session.id) }) else null
+                        ConversationCard(session, retry) { onOpen(session.id) }
+                    }
+                }
             }
+            item { Spacer(Modifier.height(20.dp)) }
         }
-        item { SectionTitle("Open commitments", memories.commitments.size.toString()) }
-        item {
-            FilterChip(
-                selected = memories.overdueOnly, onClick = { onOverdueChange(!memories.overdueOnly) },
-                label = { Text("Overdue only") }
-            )
-        }
-        if (memories.commitmentsLoading && memories.commitments.isEmpty()) {
-            item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
-        } else if (memories.commitments.isEmpty()) {
-            item {
-                EmptyCard(
-                    if (memories.overdueOnly) "Nothing is overdue." else "No open tasks or promises right now.",
-                    Icons.Outlined.CheckCircle
-                )
-            }
-        } else {
-            items(memories.commitments, key = { "open-${it.id ?: it.hashCode()}" }) { ActionableMemoryCard(it, actions) }
-        }
-        item { SectionTitle("Conversation history", history.sessions.size.toString()) }
-        if (history.loading && history.sessions.isEmpty()) {
-            item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
-        }
-        history.error?.let { item { InlineMessage(it, ErrorRed) } }
-        if (!history.loading && history.sessions.isEmpty()) {
-            item { EmptyCard("Your processed conversations will appear here after you deactivate Memory.", Icons.Outlined.History) }
-        } else {
-            items(history.sessions, key = { "session-${it.id}" }) { session ->
-                val retry: (() -> Unit)? = if (canRetry(session)) ({ onRetrySession(session.id) }) else null
-                ConversationCard(session, retry) { onOpen(session.id) }
-            }
-        }
-        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
 @Composable
-private fun SearchMemoriesCard(state: MemoriesUiState, onSearch: (String) -> Unit, onClear: () -> Unit) {
-    var query by rememberSaveable { mutableStateOf("") }
+private fun SearchOrAskBar(query: String, onQueryChange: (String) -> Unit, onClear: () -> Unit) {
+    val focus = LocalFocusManager.current
+    OutlinedTextField(
+        value = query, onValueChange = onQueryChange,
+        placeholder = { Text("Search or ask your memories…") },
+        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = onClear) { Icon(Icons.Outlined.Close, contentDescription = "Clear search") }
+            }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(28.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = CardColor, unfocusedContainerColor = CardColor,
+            unfocusedBorderColor = CardBorder
+        ),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+/** Turns the current search text into an AI question; shows the answer once there is one. */
+@Composable
+private fun AskCard(query: String, state: MemoryUiState, onAsk: (String) -> Unit) {
+    val question = query.trim()
     SurfaceCard {
-        Text("Search memories", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text("Find memories by keyword.", color = Muted)
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = query, onValueChange = { query = it },
-            placeholder = { Text("e.g. invoice, doctor") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = ""; onClear() }) {
-                        Icon(Icons.Outlined.Close, contentDescription = "Clear search")
+        val result = state.askResult
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(34.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(if (result == null) "Ask Memory" else "Answer", fontWeight = FontWeight.Bold)
+                if (result == null) {
+                    Text("Get an answer from your conversations.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        if (result == null) {
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = { onAsk(question) }, enabled = !state.asking && question.length >= 3,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            ) {
+                if (state.asking) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+                } else {
+                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Ask “$question”", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            state.askError?.let {
+                Spacer(Modifier.height(10.dp)); Text(it, color = ErrorRed, style = MaterialTheme.typography.bodySmall)
+            }
+        } else {
+            Spacer(Modifier.height(12.dp))
+            Text(result.answer)
+            if (result.sources.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text("Sources", color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                result.sources.forEach { source ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(source.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    source.evidence.firstOrNull()?.let {
+                        Text(
+                            "“$it”", style = MaterialTheme.typography.bodySmall, color = Muted,
+                            maxLines = 3, overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { onSearch(query) }, enabled = query.isNotBlank() && !state.searching,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (state.searching) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
-            else Text("Search")
+            }
         }
     }
 }
@@ -718,13 +910,14 @@ private fun ConversationCard(session: ConversationSession, onRetry: (() -> Unit)
     }
 }
 
+/** Server statuses reduced to what a user cares about. */
 @Composable
 private fun StatusPill(status: String) {
-    val label = status.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
-    val color = when (status.uppercase()) {
-        "COMPLETED", "TRANSCRIPTION_COMPLETE" -> Primary
-        "FAILED" -> ErrorRed
-        else -> Warning
+    val (label, color) = when (status.uppercase()) {
+        "COMPLETED" -> "Ready" to Primary
+        "FAILED" -> "Failed" to ErrorRed
+        "RECORDING" -> "Recording" to Warning
+        else -> "Processing" to Warning
     }
     Box(
         Modifier.background(color.copy(alpha = 0.12f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)
@@ -739,62 +932,31 @@ private fun ConversationDetailScreen(
     history: HistoryUiState,
     memories: MemoriesUiState,
     actions: MemoryActions,
-    onRename: (String) -> Unit,
-    onDelete: () -> Unit,
     onRetry: (String) -> Unit
 ) {
     val detail = history.selected ?: return
-    var title by rememberSaveable(detail.session.id) { mutableStateOf(detail.session.title) }
-    var editingTitle by rememberSaveable(detail.session.id) { mutableStateOf(false) }
     var transcriptVisible by rememberSaveable(detail.session.id) { mutableStateOf(false) }
-    var confirmDelete by rememberSaveable(detail.session.id) { mutableStateOf(false) }
-
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete conversation?") },
-            text = { Text("This permanently removes its transcript, memories, and stored recording.") },
-            confirmButton = {
-                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete", color = ErrorRed) }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
-        )
-    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item { Spacer(Modifier.height(4.dp)) }
         item {
+            Spacer(Modifier.height(4.dp))
             SurfaceCard {
-                if (editingTitle) {
-                    OutlinedTextField(
-                        value = title, onValueChange = { title = it }, label = { Text("Conversation title") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Text(
+                        detail.session.title, style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { onRename(title); editingTitle = false },
-                            enabled = title.isNotBlank() && !history.mutating
-                        ) { Text("Save") }
-                        TextButton(onClick = { title = detail.session.title; editingTitle = false }) { Text("Cancel") }
-                    }
-                } else {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            detail.session.title, style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = { editingTitle = true }) { Text("Rename") }
-                    }
-                    Text(friendlyDateTime(detail.session.startedAt), color = Muted)
+                    Spacer(Modifier.width(8.dp))
+                    StatusPill(detail.session.status)
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(friendlyDateTime(detail.session.startedAt), color = Muted)
             }
         }
         history.error?.let { item { InlineMessage(it, ErrorRed) } }
-        memories.error?.let { item { InlineMessage(it, ErrorRed) } }
         if (history.mutating || memories.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (canRetry(detail.session)) {
             item {
@@ -826,7 +988,7 @@ private fun ConversationDetailScreen(
             item { EmptyCard("No active memories remain in this conversation.", Icons.Outlined.AutoAwesome) }
         } else {
             items(detail.memories, key = { "memory-${it.id ?: "${it.type}-${it.title}"}" }) { memory ->
-                ActionableMemoryCard(memory, actions)
+                ActionableMemoryCard(memory, actions, showSource = false)
             }
         }
         item {
@@ -836,11 +998,6 @@ private fun ConversationDetailScreen(
         }
         if (transcriptVisible) {
             item { SurfaceCard { Text(detail.transcript.ifBlank { "No transcript returned." }) } }
-        }
-        item {
-            TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("Delete conversation", color = ErrorRed)
-            }
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
@@ -968,6 +1125,12 @@ private fun EmptyCard(message: String, icon: ImageVector = Icons.Outlined.Histor
     }
 }
 
+private const val LOW_CONFIDENCE = 0.6
+
+/** "TASK" -> "Task". */
+private fun memoryTypeLabel(type: String): String =
+    type.lowercase(Locale.ROOT).replaceFirstChar { it.titlecase(Locale.ROOT) }
+
 private fun memoryTypeIcon(type: String): ImageVector = when (type.uppercase()) {
     "TASK" -> Icons.Outlined.CheckCircle
     "PROMISE" -> Icons.Outlined.Handshake
@@ -982,14 +1145,15 @@ private fun memoryTypeIcon(type: String): ImageVector = when (type.uppercase()) 
 }
 
 @Composable
-private fun ActionableMemoryCard(memory: MemoryItem, actions: MemoryActions) {
+private fun ActionableMemoryCard(memory: MemoryItem, actions: MemoryActions, showSource: Boolean) {
     val id = memory.id
     val open = memory.resolutionStatus == "OPEN"
     MemoryCard(
         memory,
         onDone = if (id != null && open) ({ actions.onDone(id) }) else null,
         onDelete = if (id != null) ({ actions.onDelete(id) }) else null,
-        onReschedule = if (id != null && open) ({ days: Long? -> actions.onReschedule(id, days) }) else null
+        onReschedule = if (id != null && open) ({ days: Long? -> actions.onReschedule(id, days) }) else null,
+        onOpenConversation = memory.sessionId?.takeIf { showSource }?.let { sessionId -> { actions.onOpenConversation(sessionId) } }
     )
 }
 
@@ -999,23 +1163,12 @@ private fun MemoryCard(
     memory: MemoryItem,
     onDone: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
-    onReschedule: ((Long?) -> Unit)? = null
+    onReschedule: ((Long?) -> Unit)? = null,
+    onOpenConversation: (() -> Unit)? = null
 ) {
-    var confirmDelete by rememberSaveable { mutableStateOf(false) }
     var dueMenuOpen by remember { mutableStateOf(false) }
     val overdue = isOverdue(memory)
-
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete memory?") },
-            text = { Text("This permanently removes this memory. The conversation and its transcript stay.") },
-            confirmButton = {
-                TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("Delete", color = ErrorRed) }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
-        )
-    }
+    val lowConfidence = (memory.confidence ?: 1.0) < LOW_CONFIDENCE
 
     SurfaceCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1023,7 +1176,11 @@ private fun MemoryCard(
                 Icon(memoryTypeIcon(memory.type), contentDescription = null, tint = Primary, modifier = Modifier.size(15.dp))
             }
             Spacer(Modifier.width(8.dp))
-            Text(memory.type, color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            Text(memoryTypeLabel(memory.type), color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            if (memory.resolutionStatus == "DONE") {
+                Spacer(Modifier.width(10.dp))
+                Text("Done", color = Muted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+            }
             if (overdue) {
                 Spacer(Modifier.width(10.dp))
                 Text("Overdue", color = ErrorRed, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
@@ -1033,7 +1190,7 @@ private fun MemoryCard(
         Text(memory.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(5.dp))
         Text(memory.content)
-        if (memory.dueAt != null || memory.confidence != null) {
+        if (memory.dueAt != null || lowConfidence) {
             Spacer(Modifier.height(12.dp)); HorizontalDivider(); Spacer(Modifier.height(9.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 memory.dueAt?.let {
@@ -1042,12 +1199,12 @@ private fun MemoryCard(
                         color = if (overdue) ErrorRed else MaterialTheme.colorScheme.onSurface
                     )
                 }
-                memory.confidence?.let {
-                    Text("${String.format(Locale.US, "%.0f", it * 100)}% confidence", style = MaterialTheme.typography.labelMedium)
+                if (lowConfidence) {
+                    Text("Unsure — check the transcript", style = MaterialTheme.typography.labelMedium, color = Warning)
                 }
             }
         }
-        if (onDone != null || onDelete != null || onReschedule != null) {
+        if (onDone != null || onDelete != null || onReschedule != null || onOpenConversation != null) {
             Spacer(Modifier.height(10.dp))
             // FlowRow wraps the buttons onto a second line on narrow screens instead of overflowing.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1078,67 +1235,10 @@ private fun MemoryCard(
                         }
                     }
                 }
-                onDelete?.let { TextButton(onClick = { confirmDelete = true }) { Text("Delete", color = ErrorRed) } }
+                onOpenConversation?.let { TextButton(onClick = it) { Text("View conversation") } }
+                // No confirmation dialog: the snackbar offers Undo before the delete is sent.
+                onDelete?.let { TextButton(onClick = it) { Text("Delete", color = ErrorRed) } }
             }
-        }
-    }
-}
-
-@Composable
-private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
-    var question by rememberSaveable { mutableStateOf("") }
-    SurfaceCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(34.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Text("Ask Memory", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(5.dp))
-        Text("Find something from your conversations.", color = Muted)
-        Spacer(Modifier.height(14.dp))
-        OutlinedTextField(
-            value = question, onValueChange = { question = it },
-            placeholder = { Text("What did I agree to do?") }, modifier = Modifier.fillMaxWidth(),
-            minLines = 1, maxLines = 3
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { onAsk(question) }, enabled = question.isNotBlank() && !state.asking,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (state.asking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
-            else {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp)); Text("Ask")
-            }
-        }
-        AnimatedVisibility(state.askResult != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-            // AnimatedVisibility lays its children out on top of each other, so they must share one Column.
-            Column(Modifier.fillMaxWidth()) {
-                state.askResult?.let { result ->
-                    Spacer(Modifier.height(16.dp)); HorizontalDivider(); Spacer(Modifier.height(14.dp))
-                    Text(result.answer, fontWeight = FontWeight.Medium)
-                    if (result.sources.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("Sources", color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                        result.sources.forEach { source ->
-                            Spacer(Modifier.height(8.dp))
-                            Text(source.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            source.evidence.firstOrNull()?.let {
-                                Text(
-                                    "“$it”", style = MaterialTheme.typography.bodySmall, color = Muted,
-                                    maxLines = 3, overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        state.askError?.let {
-            Spacer(Modifier.height(10.dp)); Text(it, color = ErrorRed, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

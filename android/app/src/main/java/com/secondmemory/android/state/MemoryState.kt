@@ -79,5 +79,6 @@ object MemoryState {
     fun asking(value: Boolean) = mutable.update { it.copy(asking = value, askError = null) }
     fun answer(result: AskResult) = mutable.update { it.copy(asking = false, askResult = result, askError = null) }
     fun askFailure(message: String) = mutable.update { it.copy(asking = false, askError = message) }
+    fun clearAnswer() = mutable.update { it.copy(askResult = null, askError = null) }
     fun connection(message: String?) = mutable.update { it.copy(connectionMessage = message) }
 }

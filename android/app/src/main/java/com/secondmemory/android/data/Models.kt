@@ -8,7 +8,8 @@ data class MemoryItem(
     val dueAt: String?,
     val importance: Double?,
     val confidence: Double?,
-    val id: String? = null
+    val id: String? = null,
+    val sessionId: String? = null
 )
 
 data class SessionResult(

@@ -15,9 +15,11 @@ import java.util.UUID;
 
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
+    private final AppUserRepository users;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, AppUserRepository users) {
         this.jwtService = jwtService;
+        this.users = users;
     }
 
     @Override
@@ -27,7 +29,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith("Bearer ")) {
             String token = header.substring("Bearer ".length());
             Optional<UUID> userId = jwtService.verify(token);
-            if (userId.isPresent()) {
+            // A valid signature isn't enough: the account may have been deleted since the token was issued.
+            if (userId.isPresent() && users.existsById(userId.get())) {
                 var authentication = new UsernamePasswordAuthenticationToken(
                         userId.get().toString(), null, List.of());
                 SecurityContextHolder.getContext().setAuthentication(authentication);

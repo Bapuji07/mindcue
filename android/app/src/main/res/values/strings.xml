@@ -2,4 +2,245 @@
     <string name="app_name">MindCue</string>
     <string name="recording_channel_name">Active memory</string>
     <string name="recording_channel_description">Shows when MindCue is listening</string>
+
+    <!-- Navigation and common actions -->
+    <string name="nav_home">Home</string>
+    <string name="nav_tasks">Tasks</string>
+    <string name="nav_memories">Memories</string>
+    <string name="nav_settings">Settings</string>
+    <string name="title_conversation">Conversation</string>
+    <string name="action_back">Back</string>
+    <string name="action_more_options">More options</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_save">Save</string>
+    <string name="action_close">Close</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_continue">Continue</string>
+    <string name="action_not_now">Not now</string>
+    <string name="action_view">View</string>
+
+    <!-- Microphone permission -->
+    <string name="permission_mic_needed">Microphone permission is needed to activate Memory.</string>
+    <string name="permission_rationale_title">Allow the microphone?</string>
+    <string name="permission_rationale_text">MindCue records only while Memory is active. Each recording becomes a transcript and memories, and the audio is deleted once that\'s done.</string>
+    <string name="permission_settings_title">Microphone access is off</string>
+    <string name="permission_settings_text">To record conversations, allow the microphone for MindCue in your phone\'s settings.</string>
+    <string name="action_open_settings">Open settings</string>
+
+    <!-- Sign in -->
+    <string name="login_subtitle_sign_in">Sign in to continue.</string>
+    <string name="login_subtitle_register">Create an account to continue.</string>
+    <string name="field_username">Username</string>
+    <string name="field_password">Password</string>
+    <string name="password_requirement">At least 8 characters</string>
+    <string name="action_sign_in">Sign in</string>
+    <string name="action_create_account">Create account</string>
+    <string name="login_switch_to_sign_in">Already have an account? Sign in</string>
+    <string name="login_switch_to_register">Don\'t have an account? Create one</string>
+    <string name="show_password">Show password</string>
+    <string name="hide_password">Hide password</string>
+    <string name="error_sign_in">Could not sign in</string>
+    <string name="account_deleted_notice">Your account and its data were deleted.</string>
+
+    <!-- Home -->
+    <string name="home_headline">Be present. Remember later.</string>
+    <string name="home_subtitle">Activate Memory when a conversation matters.</string>
+    <string name="action_activate_memory">Activate Memory</string>
+    <string name="action_start_recording">Start recording</string>
+    <plurals name="minutes_left_this_month">
+        <item quantity="one">%d min of recording left this month</item>
+        <item quantity="other">%d min of recording left this month</item>
+    </plurals>
+    <string name="minutes_used_up">No recording minutes left this month. They reset on %s.</string>
+    <string name="recording_needs_attention">Recording needs attention</string>
+    <string name="action_retry_processing">Retry processing</string>
+    <string name="action_discard_recording">Discard recording</string>
+    <string name="dialog_discard_title">Discard recording?</string>
+    <string name="dialog_discard_text">The unprocessed recording is deleted from this phone and cannot be recovered.</string>
+    <string name="action_discard">Discard</string>
+    <string name="latest_memory">Latest memory</string>
+    <string name="latest_memory_fallback">Your latest conversation is ready.</string>
+    <string name="pending_recording_message">A recording from earlier hasn\'t finished processing. Retry to upload and process it.</string>
+
+    <!-- Recording -->
+    <string name="recording_active_title">Memory is active</string>
+    <string name="recording_lock_hint">You can lock your phone. Listening will continue.</string>
+    <string name="action_stop_and_save">Stop &amp; save</string>
+    <string name="processing_title">Creating your memory</string>
+    <string name="processing_leave_hint">It is safe to leave this screen.</string>
+
+    <!-- Tasks -->
+    <string name="filter_all_open">All open</string>
+    <string name="filter_overdue">Overdue</string>
+    <string name="tasks_empty">You\'re all caught up. Tasks and promises from your conversations appear here.</string>
+    <string name="tasks_empty_overdue">Nothing is overdue. Nice work.</string>
+    <string name="swipe_done">Done</string>
+    <string name="swipe_tomorrow">Tomorrow</string>
+
+    <!-- Memories: search, ask, conversations -->
+    <string name="search_placeholder">Search or ask your memories…</string>
+    <string name="action_clear_search">Clear search</string>
+    <string name="ask_title">Ask Memory</string>
+    <string name="ask_subtitle">Get an answer from your conversations.</string>
+    <string name="answer_title">Answer</string>
+    <string name="action_ask">Ask “%s”</string>
+    <string name="sources">Sources</string>
+    <string name="matching_memories">Matching memories</string>
+    <string name="keep_typing">Keep typing to search…</string>
+    <string name="no_matches">No memories mention “%s”. Try asking instead.</string>
+    <string name="conversations">Conversations</string>
+    <string name="conversations_empty">Your conversations appear here after you record one on Home.</string>
+    <string name="status_ready">Ready</string>
+    <string name="status_failed">Failed</string>
+    <string name="status_recording">Recording</string>
+    <string name="status_processing">Processing</string>
+
+    <!-- Conversation -->
+    <string name="dialog_rename_title">Rename conversation</string>
+    <string name="field_title">Title</string>
+    <string name="action_delete_conversation">Delete conversation</string>
+    <string name="dialog_delete_conversation_title">Delete conversation?</string>
+    <string name="dialog_delete_conversation_text">This permanently removes its transcript and memories. This can\'t be undone.</string>
+    <string name="processing_failed">Processing failed</string>
+    <string name="processing_stuck">Processing seems stuck</string>
+    <string name="summary">Summary</string>
+    <string name="summary_missing">No summary was generated.</string>
+    <string name="memories_section">Memories</string>
+    <string name="memories_empty_in_conversation">No active memories remain in this conversation.</string>
+    <string name="show_transcript">Show transcript</string>
+    <string name="hide_transcript">Hide transcript</string>
+    <string name="transcript_missing">No transcript returned.</string>
+
+    <!-- Memory cards -->
+    <string name="memory_type_fact">Fact</string>
+    <string name="memory_type_decision">Decision</string>
+    <string name="memory_type_task">Task</string>
+    <string name="memory_type_promise">Promise</string>
+    <string name="memory_type_problem">Problem</string>
+    <string name="memory_type_idea">Idea</string>
+    <string name="memory_type_question">Question</string>
+    <string name="memory_type_preference">Preference</string>
+    <string name="memory_type_event">Event</string>
+    <string name="memory_type_note">Note</string>
+    <string name="memory_done">Done</string>
+    <string name="memory_overdue">Overdue</string>
+    <string name="due_at">Due %s</string>
+    <string name="low_confidence">Unsure — check the transcript</string>
+    <string name="action_mark_done">Mark done</string>
+    <string name="action_set_due">Set due</string>
+    <string name="action_reschedule">Reschedule</string>
+    <string name="due_tomorrow">Tomorrow</string>
+    <string name="due_in_3_days">In 3 days</string>
+    <string name="due_in_a_week">In a week</string>
+    <string name="due_clear">Clear due date</string>
+    <string name="action_view_conversation">View conversation</string>
+
+    <!-- Snackbars and errors -->
+    <string name="marked_done">Marked as done</string>
+    <string name="memory_deleted">Memory deleted</string>
+    <string name="rescheduled">Rescheduled</string>
+    <string name="moved_to_tomorrow">Moved to tomorrow</string>
+    <string name="due_date_cleared">Due date cleared</string>
+    <string name="error_update_memory">Could not update memory</string>
+    <string name="error_delete_memory">Could not delete memory</string>
+    <string name="error_load_tasks">Could not load tasks</string>
+    <string name="error_search">Could not search memories</string>
+    <string name="error_ask">Could not ask Memory</string>
+    <string name="error_session_expired">Your session expired. Please sign in again.</string>
+    <string name="error_load_conversations">Could not load conversations</string>
+    <string name="error_open_conversation">Could not open conversation</string>
+    <string name="error_update_conversation">Could not update conversation</string>
+    <string name="error_retry_processing">Could not retry processing</string>
+    <string name="error_activate">Could not activate Memory</string>
+    <string name="error_delete_account">Could not delete the account</string>
+    <string name="recording_minutes_used_up">You\'ve used this month\'s recording minutes. They reset on %s.</string>
+
+    <!-- Dates -->
+    <string name="date_today">Today</string>
+    <string name="date_yesterday">Yesterday</string>
+    <string name="date_tomorrow">Tomorrow</string>
+    <string name="date_with_time">%1$s, %2$s</string>
+    <string name="date_unknown">Unknown date</string>
+
+    <!-- Settings -->
+    <string name="signed_in_as">Signed in as</string>
+    <string name="unknown_user">Unknown</string>
+    <string name="usage_title">Usage</string>
+    <string name="usage_unlimited">Unlimited account</string>
+    <plurals name="usage_unlimited_minutes">
+        <item quantity="one">%d min recorded this month</item>
+        <item quantity="other">%d min recorded this month</item>
+    </plurals>
+    <plurals name="usage_unlimited_questions">
+        <item quantity="one">%d question asked today</item>
+        <item quantity="other">%d questions asked today</item>
+    </plurals>
+    <string name="usage_recording_this_month">Recording this month</string>
+    <string name="usage_ask_today">Ask Memory today</string>
+    <string name="usage_meter_minutes">%1$d / %2$d min</string>
+    <plurals name="usage_meter_questions">
+        <item quantity="one">%1$d / %2$d question</item>
+        <item quantity="other">%1$d / %2$d questions</item>
+    </plurals>
+    <string name="usage_resets_on">Resets %s</string>
+    <string name="usage_resets_daily">Resets daily</string>
+    <plurals name="usage_max_recording">
+        <item quantity="one">Each recording can be up to %d minute.</item>
+        <item quantity="other">Each recording can be up to %d minutes.</item>
+    </plurals>
+    <string name="appearance">Appearance</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="about">About</string>
+    <string name="privacy_title">Your data &amp; privacy</string>
+    <string name="privacy_summary">What is stored, and where</string>
+    <string name="privacy_point_upload">Recordings are uploaded to the MindCue server over an encrypted connection.</string>
+    <string name="privacy_point_transcribe">The audio is sent to Google Gemini to create the transcript. It\'s deleted from the server once the transcript is ready, and from this phone once processing succeeds.</string>
+    <string name="privacy_point_storage">Transcripts, summaries and memories are stored on the MindCue server until you delete the conversation or your account.</string>
+    <string name="privacy_point_ask">Ask Memory sends your question and your most relevant memories to Google Gemini to write the answer.</string>
+    <string name="privacy_point_delete">You can delete your account at any time from Settings.</string>
+    <string name="version_label">Version</string>
+    <string name="version_value">%1$s (%2$d)</string>
+    <string name="account">Account</string>
+    <string name="action_log_out">Log out</string>
+    <string name="logout_title">Log out?</string>
+    <string name="logout_text">You can sign in again at any time.</string>
+    <string name="logout_pending_text">A recording on this phone hasn\'t been processed yet. Logging out deletes it.</string>
+    <string name="delete_account">Delete account</string>
+    <string name="delete_account_summary">Permanently remove your account and data</string>
+    <string name="delete_account_title">Delete your account?</string>
+    <string name="delete_account_text">This permanently deletes your account, conversations, transcripts and memories. It can\'t be undone. Anonymous usage counts are kept for fair-use limits.</string>
+    <string name="delete_account_password">Enter your password to confirm</string>
+
+    <!-- Recording notifications and progress -->
+    <string name="notification_active_text">Tap Stop &amp; save when the conversation ends</string>
+    <string name="notification_processing_title">Processing memory</string>
+    <string name="notification_ready_title">Memory ready</string>
+    <plurals name="memories_extracted">
+        <item quantity="one">%d memory extracted</item>
+        <item quantity="other">%d memories extracted</item>
+    </plurals>
+    <plurals name="memories_extracted_at_limit">
+        <item quantity="one">Stopped at your recording limit. %d memory extracted</item>
+        <item quantity="other">Stopped at your recording limit. %d memories extracted</item>
+    </plurals>
+    <string name="notification_sign_in_title">Sign-in needed</string>
+    <string name="notification_sign_in_text">Open the app to sign in again</string>
+    <string name="notification_attention_title">Memory needs attention</string>
+    <string name="notification_attention_text">Open the app to retry</string>
+    <string name="progress_preparing_upload">Preparing upload…</string>
+    <string name="progress_uploading">Uploading recording…</string>
+    <string name="progress_preparing">Preparing…</string>
+    <string name="progress_transcribing">Transcribing your recording…</string>
+    <string name="progress_transcribed">Transcription complete, extracting memories…</string>
+    <string name="progress_extracting">Extracting memories…</string>
+    <string name="progress_working">Transcribing and extracting memories…</string>
+    <string name="error_recording_unusable">The recording was too short or could not be saved. Activate Memory and try again.</string>
+    <string name="error_recording_session_expired">Your session expired. Open the app to sign in again.</string>
+    <string name="error_microphone">Could not activate the microphone: %s</string>
+    <string name="error_processing_failed">Processing failed</string>
+    <string name="error_processing_slow">Processing is taking longer than expected. Check back in the app shortly.</string>
 </resources>

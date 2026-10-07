@@ -155,6 +155,11 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         request("DELETE", "api/v1/memory/memories/$memoryId")
     }
 
+    /** Permanently deletes the signed-in account; the password is checked again on the server. */
+    fun deleteAccount(password: String) {
+        request("POST", "api/v1/account/delete", JSONObject().put("password", password))
+    }
+
     fun updateMemory(
         memoryId: String,
         status: String? = null,

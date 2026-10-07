@@ -31,6 +31,16 @@ public class AppUserRepository {
                 .stream().findFirst();
     }
 
+    public Optional<AppUser> findById(UUID id) {
+        return jdbc.query("SELECT * FROM app_user WHERE id = ?", this::mapRow, id)
+                .stream().findFirst();
+    }
+
+    public boolean existsById(UUID id) {
+        Boolean exists = jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM app_user WHERE id = ?)", Boolean.class, id);
+        return Boolean.TRUE.equals(exists);
+    }
+
     public long count() {
         Long total = jdbc.queryForObject("SELECT COUNT(*) FROM app_user", Long.class);
         return total == null ? 0 : total;

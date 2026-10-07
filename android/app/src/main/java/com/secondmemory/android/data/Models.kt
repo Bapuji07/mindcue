@@ -80,3 +80,9 @@ data class UsageInfo(
     /** Longest recording that can still be processed right now. */
     val recordableMinutes: Int get() = minOf(audioMinutesLeft, maxRecordingMinutes)
 }
+
+/** The app's light/dark choice; SYSTEM follows the phone setting. */
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+/** Progress of a delete-account request, shown in its confirmation dialog. */
+data class AccountDeletionState(val deleting: Boolean = false, val error: String? = null)

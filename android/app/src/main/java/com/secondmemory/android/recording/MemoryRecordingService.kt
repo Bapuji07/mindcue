@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.time.OffsetDateTime
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.log10
 
 class MemoryRecordingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -64,7 +65,7 @@ class MemoryRecordingService : Service() {
         stoppedAtLimit = false
         createChannel()
         try {
-            val directory = File(filesDir, "recordings").apply { mkdirs() }
+            val directory = File(filesDir, RECORDINGS_DIR).apply { mkdirs() }
             outputFile = File(directory, "memory-${System.currentTimeMillis()}.m4a")
             startedAt = OffsetDateTime.now().toString()
             recorder = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else {
@@ -80,12 +81,15 @@ class MemoryRecordingService : Service() {
                 start()
             }
             startedElapsed = SystemClock.elapsedRealtime()
-            startMicrophoneForeground(notification("Memory is active", "Tap Deactivate when the conversation ends"))
+            startMicrophoneForeground(
+                notification(getString(R.string.recording_active_title), getString(R.string.notification_active_text))
+            )
             MemoryState.active()
             handler.post(ticker)
+            handler.post(levelPoller)
         } catch (ex: Exception) {
             recorder?.release(); recorder = null
-            MemoryState.failure("Could not activate the microphone: ${ex.message}")
+            MemoryState.failure(getString(R.string.error_microphone, ex.message.orEmpty()))
             stopSelf()
         }
     }
@@ -106,9 +110,20 @@ class MemoryRecordingService : Service() {
         }
     }
 
+    /** Feeds the level meter: fast while the recording screen shows it, slow otherwise. */
+    private val levelPoller = object : Runnable {
+        override fun run() {
+            val active = recorder ?: return
+            MemoryState.level(normalizedLevel(runCatching { active.maxAmplitude }.getOrDefault(0)))
+            handler.postDelayed(this, if (MemoryState.levelObserved()) 100L else 1000L)
+        }
+    }
+
     private fun stopAndProcess() {
         val file = outputFile ?: return
         handler.removeCallbacks(ticker)
+        handler.removeCallbacks(levelPoller)
+        MemoryState.level(0f)
         try {
             recorder?.stop()
             recorder?.release()
@@ -120,7 +135,7 @@ class MemoryRecordingService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             // The file is unusable, so don't offer "Retry processing" for it.
             runCatching { file.delete() }
-            MemoryState.failure("The recording was too short or could not be saved. Activate Memory and try again.", null)
+            MemoryState.failure(getString(R.string.error_recording_unusable), null)
             stopSelf()
         }
     }
@@ -128,11 +143,12 @@ class MemoryRecordingService : Service() {
     private fun process(file: File) {
         if (!processing.compareAndSet(false, true)) return
         createChannel()
-        val processingNotification = notification("Processing memory", "Preparing upload…", canDeactivate = false)
+        val processingTitle = getString(R.string.notification_processing_title)
+        val processingNotification = notification(processingTitle, getString(R.string.progress_preparing_upload), canStop = false)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIFICATION_ID, processingNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else startForeground(NOTIFICATION_ID, processingNotification)
-        MemoryState.processing("Preparing upload…", file.absolutePath)
+        MemoryState.processing(getString(R.string.progress_preparing_upload), file.absolutePath)
         AppSettings.savePendingAudio(this, file.absolutePath)
         scope.launch {
             try {
@@ -147,31 +163,34 @@ class MemoryRecordingService : Service() {
                     AppSettings.savePendingSession(this@MemoryRecordingService, file.absolutePath, sessionId)
                 }
                 if (!AppSettings.pendingUploaded(this@MemoryRecordingService)) {
-                    MemoryState.processing("Uploading recording…", file.absolutePath)
-                    updateNotification("Processing memory", "Uploading recording…")
+                    showProgress(getString(R.string.progress_uploading), file)
                     client.upload(sessionId, file)
                     AppSettings.markPendingUploaded(this@MemoryRecordingService)
                 }
-                MemoryState.processing("Transcribing and extracting memories…", file.absolutePath)
-                updateNotification("Processing memory", "Transcribing and extracting memories…")
+                showProgress(getString(R.string.progress_working), file)
                 // 409: an earlier attempt is still running (or already finished), so just follow it.
                 try { client.startProcessing(sessionId) } catch (alreadyRunning: ConflictException) { }
                 val result = pollUntilDone(client, sessionId, file)
                 AppSettings.saveLastResult(this@MemoryRecordingService, result)
                 AppSettings.clearPending(this@MemoryRecordingService)
-                MemoryState.ready(result, file.absolutePath)
+                // The server has the transcript now; the local copy of the audio is no longer needed.
+                runCatching { file.delete() }
+                MemoryState.ready(result)
+                val count = result.memories.size
                 finalNotification(
-                    "Memory ready",
-                    (if (stoppedAtLimit) "Stopped at your recording limit. " else "") +
-                        "${result.memories.size} memories extracted"
+                    getString(R.string.notification_ready_title),
+                    resources.getQuantityString(
+                        if (stoppedAtLimit) R.plurals.memories_extracted_at_limit else R.plurals.memories_extracted,
+                        count, count
+                    )
                 )
             } catch (ex: AuthException) {
                 AppSettings.clearSession(this@MemoryRecordingService)
-                MemoryState.failure("Your session expired. Open the app to sign in again.", file.absolutePath)
-                finalNotification("Sign-in needed", "Open the app to sign in again")
+                MemoryState.failure(getString(R.string.error_recording_session_expired), file.absolutePath)
+                finalNotification(getString(R.string.notification_sign_in_title), getString(R.string.notification_sign_in_text))
             } catch (ex: Exception) {
-                MemoryState.failure(ex.message ?: "Processing failed", file.absolutePath)
-                finalNotification("Memory needs attention", "Open the app to retry")
+                MemoryState.failure(ex.message ?: getString(R.string.error_processing_failed), file.absolutePath)
+                finalNotification(getString(R.string.notification_attention_title), getString(R.string.notification_attention_text))
             } finally {
                 processing.set(false)
                 stopForeground(STOP_FOREGROUND_DETACH)
@@ -180,37 +199,39 @@ class MemoryRecordingService : Service() {
         }
     }
 
+    private fun showProgress(label: String, file: File) {
+        MemoryState.processing(label, file.absolutePath)
+        updateNotification(getString(R.string.notification_processing_title), label)
+    }
+
     private suspend fun pollUntilDone(client: BackendClient, sessionId: String, file: File): SessionResult {
         val deadline = SystemClock.elapsedRealtime() + POLL_TIMEOUT_MS
         while (SystemClock.elapsedRealtime() < deadline) {
             val detail = client.sessionDetail(sessionId)
-            val status = detail.session.status
-            when (status) {
+            when (val status = detail.session.status) {
                 "COMPLETED" -> return SessionResult(
                     sessionId = sessionId,
                     transcript = detail.transcript,
                     summary = detail.session.summary.orEmpty(),
                     memories = detail.memories
                 )
-                "FAILED" -> throw BackendException(detail.session.errorMessage ?: "Processing failed")
-                else -> {
-                    val label = statusLabel(status)
-                    MemoryState.processing(label, file.absolutePath)
-                    updateNotification("Processing memory", label)
-                }
+                "FAILED" -> throw BackendException(detail.session.errorMessage ?: getString(R.string.error_processing_failed))
+                else -> showProgress(statusLabel(status), file)
             }
             delay(POLL_INTERVAL_MS)
         }
-        throw BackendException("Processing is taking longer than expected. Check back in the app shortly.")
+        throw BackendException(getString(R.string.error_processing_slow))
     }
 
-    private fun statusLabel(status: String): String = when (status) {
-        "AUDIO_RECEIVED" -> "Preparing…"
-        "TRANSCRIBING" -> "Transcribing your recording…"
-        "TRANSCRIPTION_COMPLETE" -> "Transcription complete, extracting memories…"
-        "PROCESSING" -> "Extracting memories…"
-        else -> "Transcribing and extracting memories…"
-    }
+    private fun statusLabel(status: String): String = getString(
+        when (status) {
+            "AUDIO_RECEIVED" -> R.string.progress_preparing
+            "TRANSCRIBING" -> R.string.progress_transcribing
+            "TRANSCRIPTION_COMPLETE" -> R.string.progress_transcribed
+            "PROCESSING" -> R.string.progress_extracting
+            else -> R.string.progress_working
+        }
+    )
 
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java)
@@ -225,16 +246,16 @@ class MemoryRecordingService : Service() {
         } else startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun notification(title: String, text: String, canDeactivate: Boolean = true): Notification {
+    private fun notification(title: String, text: String, canStop: Boolean = true): Notification {
         val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_memory_foreground).setContentTitle(title).setContentText(text)
-            .setContentIntent(open).setOngoing(canDeactivate).setOnlyAlertOnce(true)
-        if (canDeactivate) {
+            .setContentIntent(open).setOngoing(canStop).setOnlyAlertOnce(true)
+        if (canStop) {
             val stop = PendingIntent.getService(this, 2, Intent(this, MemoryRecordingService::class.java).setAction(ACTION_DEACTIVATE),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(0, "Deactivate", stop)
+            builder.addAction(0, getString(R.string.action_stop_and_save), stop)
         }
         return builder.build()
     }
@@ -247,12 +268,15 @@ class MemoryRecordingService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        handler.removeCallbacks(levelPoller)
         recorder?.release()
         scope.cancel()
         super.onDestroy()
     }
 
     companion object {
+        /** Folder under filesDir that holds recordings until they are processed. */
+        const val RECORDINGS_DIR = "recordings"
         private const val CHANNEL_ID = "memory_recording"
         private const val NOTIFICATION_ID = 501
         private const val ACTION_ACTIVATE = "com.secondmemory.ACTIVATE"
@@ -262,6 +286,13 @@ class MemoryRecordingService : Service() {
         private const val EXTRA_MAX_SECONDS = "max_seconds"
         private const val POLL_INTERVAL_MS = 4_000L
         private const val POLL_TIMEOUT_MS = 15 * 60 * 1_000L
+
+        /** Peak amplitude (0..32767) as a 0..1 level on a -50 dB..0 dB scale, which tracks speech well. */
+        private fun normalizedLevel(amplitude: Int): Float {
+            if (amplitude <= 0) return 0f
+            val decibels = 20 * log10(amplitude / 32767.0)
+            return ((decibels + 50) / 50).toFloat().coerceIn(0f, 1f)
+        }
 
         /** Starts recording; it stops on its own after [maxSeconds] (0 = no limit). */
         fun activate(context: Context, maxSeconds: Long) = ContextCompat.startForegroundService(context,

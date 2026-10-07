@@ -15,6 +15,8 @@ object AppSettings {
     private const val PENDING_SESSION = "pending_session"
     private const val PENDING_AUDIO = "pending_audio"
     private const val PENDING_UPLOADED = "pending_uploaded"
+    private const val THEME_MODE = "theme_mode"
+    private const val DATA_OWNER = "data_owner"
 
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -85,4 +87,24 @@ object AppSettings {
     fun markPendingUploaded(context: Context) = prefs(context).edit().putBoolean(PENDING_UPLOADED, true).apply()
     fun clearPending(context: Context) = prefs(context).edit().remove(PENDING_SESSION)
         .remove(PENDING_AUDIO).remove(PENDING_UPLOADED).apply()
+
+    fun themeMode(context: Context): ThemeMode =
+        prefs(context).getString(THEME_MODE, null)?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
+
+    fun saveThemeMode(context: Context, mode: ThemeMode) = prefs(context).edit().putString(THEME_MODE, mode.name).apply()
+
+    /** The account whose results and pending recording are stored on this phone. */
+    fun dataOwner(context: Context): String? = prefs(context).getString(DATA_OWNER, null)
+    fun saveDataOwner(context: Context, userId: String) = prefs(context).edit().putString(DATA_OWNER, userId).apply()
+
+    /**
+     * Forgets everything stored for the signed-in person: the session, the last result (which holds
+     * a transcript), the pending recording and the data owner. The theme choice is a device setting
+     * and stays.
+     */
+    fun clearUserData(context: Context) {
+        clearSession(context)
+        prefs(context).edit().remove(LAST_RESULT).remove(LAST_AUDIO).remove(PENDING_SESSION)
+            .remove(PENDING_AUDIO).remove(PENDING_UPLOADED).remove(DATA_OWNER).apply()
+    }
 }

@@ -24,6 +24,7 @@ import com.secondmemory.android.data.SessionResult
 import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
 import com.secondmemory.android.network.BackendException
+import com.secondmemory.android.network.ConflictException
 import com.secondmemory.android.state.MemoryState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +122,7 @@ class MemoryRecordingService : Service() {
             startForeground(NOTIFICATION_ID, processingNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else startForeground(NOTIFICATION_ID, processingNotification)
         MemoryState.processing("Preparing upload…", file.absolutePath)
+        AppSettings.savePendingAudio(this, file.absolutePath)
         scope.launch {
             try {
                 val client = BackendClient(
@@ -141,7 +143,8 @@ class MemoryRecordingService : Service() {
                 }
                 MemoryState.processing("Transcribing and extracting memories…", file.absolutePath)
                 updateNotification("Processing memory", "Transcribing and extracting memories…")
-                client.startProcessing(sessionId)
+                // 409: an earlier attempt is still running (or already finished), so just follow it.
+                try { client.startProcessing(sessionId) } catch (alreadyRunning: ConflictException) { }
                 val result = pollUntilDone(client, sessionId, file)
                 AppSettings.saveLastResult(this@MemoryRecordingService, result)
                 AppSettings.clearPending(this@MemoryRecordingService)

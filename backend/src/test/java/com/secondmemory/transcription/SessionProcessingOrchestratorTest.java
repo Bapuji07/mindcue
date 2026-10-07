@@ -14,8 +14,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -45,8 +45,20 @@ class SessionProcessingOrchestratorTest {
         when(transcripts.findBySession(sessionId)).thenReturn(List.of());
         orchestrator.runProcessing(sessionId, userId);
         verify(transcription).transcribe(sessionId, userId);
+        verify(memories).deleteBySession(sessionId, userId);
         verify(extraction).extract(sessionId, userId);
-        verify(memories, never()).deleteBySession(sessionId, userId);
+    }
+
+    @Test
+    void stuckProcessingSessionClearsPartialMemoriesBeforeExtracting() {
+        // Server restarted mid-extraction: the session stayed PROCESSING with some memories saved.
+        when(sessions.get(sessionId, userId)).thenReturn(session(SessionStatus.PROCESSING, null));
+        when(transcripts.findBySession(sessionId)).thenReturn(List.of(mock(TranscriptChunk.class)));
+        orchestrator.runProcessing(sessionId, userId);
+        var order = inOrder(memories, extraction);
+        order.verify(memories).deleteBySession(sessionId, userId);
+        order.verify(extraction).extract(sessionId, userId);
+        verify(transcription, never()).transcribe(sessionId, userId);
     }
 
     @Test

@@ -220,6 +220,7 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
                 val message = runCatching { JSONObject(raw).optString("message") }.getOrNull()
                 val friendly = message?.takeIf { it.isNotBlank() } ?: "Backend returned HTTP $code"
                 if (code == 401) throw AuthException(friendly)
+                if (code == 409) throw ConflictException(friendly)
                 throw BackendException(friendly)
             }
             raw
@@ -233,3 +234,5 @@ data class LoginResult(val token: String, val userId: String, val username: Stri
 
 open class BackendException(message: String) : Exception(message)
 class AuthException(message: String) : BackendException(message)
+/** The request clashes with the current server state, e.g. the conversation is already processing. */
+class ConflictException(message: String) : BackendException(message)

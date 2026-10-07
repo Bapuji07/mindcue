@@ -5,7 +5,6 @@ import com.secondmemory.memory.MemoryRepository;
 import com.secondmemory.session.MemorySession;
 import com.secondmemory.session.MemorySessionRepository;
 import com.secondmemory.session.MemorySessionService;
-import com.secondmemory.session.SessionStatus;
 import com.secondmemory.transcript.TranscriptRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,23 +39,22 @@ public class SessionProcessingOrchestrator {
     }
 
     /**
-     * Safe to call again after a failure. The recording is deleted once transcription succeeds, so a
-     * session that already has a transcript but no audio resumes at extraction instead of failing on
-     * the missing audio. Memories left behind by a previous failed run are cleared first so a retry
-     * cannot duplicate them.
+     * Safe to call again after a failed or interrupted run. The recording is deleted once
+     * transcription succeeds, so a session that already has a transcript but no audio resumes at
+     * extraction instead of failing on the missing audio. The caller has claimed the session (see
+     * MemorySessionRepository#claimForProcessing), which never admits a COMPLETED one, so any
+     * memories present here are leftovers of an unfinished run and are replaced, not duplicated.
      */
     @Async
     public void runProcessing(UUID sessionId, UUID userId) {
         try {
             MemorySession session = sessions.get(sessionId, userId);
-            if (session.status() == SessionStatus.FAILED) {
-                memories.deleteBySession(sessionId, userId);
-            }
             boolean hasAudio = session.audioUri() != null && !session.audioUri().isBlank();
             boolean hasTranscript = !transcripts.findBySession(sessionId).isEmpty();
             if (hasAudio || !hasTranscript) {
                 transcriptionService.transcribe(sessionId, userId);
             }
+            memories.deleteBySession(sessionId, userId);
             extractionService.extract(sessionId, userId);
         } catch (Exception ex) {
             log.warn("Session processing failed for session {}: {}", sessionId, ex.getMessage());

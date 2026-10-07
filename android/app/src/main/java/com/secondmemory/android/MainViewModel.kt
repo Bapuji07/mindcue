@@ -10,6 +10,7 @@ import com.secondmemory.android.data.MemoriesUiState
 import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
+import com.secondmemory.android.network.ConflictException
 import com.secondmemory.android.network.LoginResult
 import com.secondmemory.android.recording.MemoryRecordingService
 import com.secondmemory.android.state.MemoryState
@@ -297,6 +298,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pollSession(sessionId)
                 }
                 .onFailure { error ->
+                    if (error is ConflictException) {
+                        // Already running (or just finished) on the server: follow it instead of failing.
+                        mutableHistory.update { it.copy(mutating = false) }
+                        pollSession(sessionId)
+                        return@onFailure
+                    }
                     if (error is AuthException) handleAuthFailure()
                     mutableHistory.update {
                         it.copy(mutating = false, error = error.message ?: "Could not retry processing")
@@ -322,15 +329,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pollJobs.remove(sessionId)?.cancel()
         pollJobs[sessionId] = viewModelScope.launch(Dispatchers.IO) {
             val deadline = System.currentTimeMillis() + 10 * 60_000L
-            var polls = 0
             while (isActive && System.currentTimeMillis() < deadline) {
                 delay(4_000)
-                polls++
                 val detail = runCatching { client().sessionDetail(sessionId) }.getOrNull() ?: continue
                 val status = detail.session.status
-                // The server flips the status asynchronously, so ignore a FAILED seen right after the
-                // retry started; it is the old value, not a new failure.
-                if (status == "FAILED" && polls < 2) continue
                 mutableHistory.update { history ->
                     history.copy(
                         sessions = history.sessions.map { if (it.id == sessionId) detail.session else it },

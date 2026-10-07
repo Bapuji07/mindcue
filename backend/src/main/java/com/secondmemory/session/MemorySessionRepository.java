@@ -76,13 +76,29 @@ public class MemorySessionRepository {
     public void finish(UUID id, Instant endedAt, Integer durationSeconds) {
         jdbc.update("""
                 UPDATE memory_session
-                SET ended_at = ?, duration_seconds = ?, status = ?, updated_at = NOW()
+                SET ended_at = ?, duration_seconds = ?, updated_at = NOW()
                 WHERE id = ?
                 """,
                 endedAt == null ? null : Timestamp.from(endedAt),
                 durationSeconds,
-                SessionStatus.PROCESSING.name(),
                 id);
+    }
+
+    /**
+     * Atomically moves a session into PROCESSING if nothing is working on it: it has audio or a
+     * transcript waiting, it failed, or an in-progress run has not moved for 10 minutes (e.g. the
+     * server restarted mid-run). Returns false when a run is already active or the session is
+     * already COMPLETED. Concurrent callers serialize on the row, so only one of them wins.
+     */
+    public boolean claimForProcessing(UUID id, UUID userId) {
+        return jdbc.update("""
+                UPDATE memory_session
+                SET status = 'PROCESSING', error_message = NULL, updated_at = NOW()
+                WHERE id = ? AND user_id = ?
+                  AND (status IN ('AUDIO_RECEIVED', 'TRANSCRIPTION_COMPLETE', 'FAILED')
+                       OR (status IN ('TRANSCRIBING', 'PROCESSING')
+                           AND updated_at < NOW() - INTERVAL '10 minutes'))
+                """, id, userId) == 1;
     }
 
     public void clearAudioUri(UUID id) {

@@ -61,6 +61,17 @@ object AppSettings {
         return if (store.getString(PENDING_AUDIO, null) == audioPath) store.getString(PENDING_SESSION, null) else null
     }
 
+    /**
+     * Marks a recording as unfinished before any network call, so it stays retryable across app
+     * restarts even if the phone is offline. A different recording starts with no session or upload.
+     */
+    fun savePendingAudio(context: Context, audioPath: String) {
+        val store = prefs(context)
+        if (store.getString(PENDING_AUDIO, null) == audioPath) return
+        store.edit().putString(LAST_AUDIO, audioPath).putString(PENDING_AUDIO, audioPath)
+            .remove(PENDING_SESSION).putBoolean(PENDING_UPLOADED, false).apply()
+    }
+
     fun savePendingSession(context: Context, audioPath: String, sessionId: String) {
         prefs(context).edit().putString(LAST_AUDIO, audioPath).putString(PENDING_AUDIO, audioPath)
             .putString(PENDING_SESSION, sessionId)

@@ -3,6 +3,7 @@ package com.secondmemory.memory;
 import com.secondmemory.ai.AiProviderRegistry;
 import com.secondmemory.ai.ChatAiProvider;
 import com.secondmemory.config.AiProperties;
+import com.secondmemory.usage.UsageService;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -26,17 +27,20 @@ public class MemoryAnswerService {
     private final AiProviderRegistry providers;
     private final AiProperties aiProperties;
     private final MemoryRepository memories;
+    private final UsageService usage;
 
     public MemoryAnswerService(AiProviderRegistry providers,
                                AiProperties aiProperties,
-                               MemoryRepository memories) {
+                               MemoryRepository memories,
+                               UsageService usage) {
         this.providers = providers;
         this.aiProperties = aiProperties;
         this.memories = memories;
+        this.usage = usage;
     }
 
     public AskMemoryResponse ask(AskMemoryRequest request, UUID userId) {
-        int topK = request.topK() == null ? 8 : Math.max(1, Math.min(request.topK(), 20));
+        int topK = request.topK() == null ? 8 : Math.max(1, Math.min(request.topK(), 10));
 
         // Local MVP currently runs without pgvector. Rank a bounded recent memory set by
         // keyword overlap. The provider-facing answer layer stays unchanged, so vector
@@ -68,15 +72,23 @@ public class MemoryAnswerService {
                     .append("RETRIEVAL_SCORE: ").append(hit.similarity()).append("\n\n");
         }
 
+        // Only questions that reach the model count toward the daily limit; a failed call is given back.
+        UUID reservation = usage.reserveAiRequest(userId);
         ChatAiProvider chatProvider = providers.chat(aiProperties.chat().provider());
-        String answer = chatProvider.generateText(
-                """
-                You answer questions using only the supplied personal memories.
-                Never invent missing facts. If the memories are incomplete or conflicting, say so.
-                Keep the answer concise and useful. Do not claim that something happened unless the memories support it.
-                """,
-                "Question:\n" + request.question() + "\n\nRetrieved memories:\n" + context
-        );
+        String answer;
+        try {
+            answer = chatProvider.generateText(
+                    """
+                    You answer questions using only the supplied personal memories.
+                    Never invent missing facts. If the memories are incomplete or conflicting, say so.
+                    Keep the answer concise and useful. Do not claim that something happened unless the memories support it.
+                    """,
+                    "Question:\n" + request.question() + "\n\nRetrieved memories:\n" + context
+            );
+        } catch (RuntimeException ex) {
+            usage.releaseAiRequest(reservation);
+            throw ex;
+        }
 
         return new AskMemoryResponse(answer, sources);
     }

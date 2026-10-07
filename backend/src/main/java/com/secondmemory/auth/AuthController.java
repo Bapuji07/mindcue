@@ -1,5 +1,6 @@
 package com.secondmemory.auth;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -16,24 +17,35 @@ public class AuthController {
     private final AppUserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final AuthRateLimiter rateLimiter;
 
-    public AuthController(AppUserRepository users, PasswordEncoder passwordEncoder, JwtService jwtService) {
+    public AuthController(AppUserRepository users, PasswordEncoder passwordEncoder, JwtService jwtService,
+                          AuthRateLimiter rateLimiter) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping("/login")
-    public LoginResponse login(@Valid @RequestBody LoginRequest request) {
+    public LoginResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        rateLimiter.checkLogin(ip);
         AppUser user = users.findByUsername(request.username())
                 .filter(candidate -> passwordEncoder.matches(request.password(), candidate.passwordHash()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
+                .orElse(null);
+        if (user == null) {
+            rateLimiter.recordLoginFailure(ip);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
+        }
+        rateLimiter.clearLoginFailures(ip);
         String token = jwtService.issue(user.id(), user.username());
         return new LoginResponse(token, user.id(), user.username());
     }
 
     @PostMapping("/register")
-    public LoginResponse register(@Valid @RequestBody RegisterRequest request) {
+    public LoginResponse register(@Valid @RequestBody RegisterRequest request, HttpServletRequest http) {
+        rateLimiter.checkAndRecordRegistration(http.getRemoteAddr());
         String username = request.username().trim();
         if (users.findByUsername(username).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Username is already taken");

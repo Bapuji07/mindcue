@@ -1,5 +1,7 @@
 package com.secondmemory.ai.provider;
 
+import com.secondmemory.audio.Mp4Boxes;
+
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Path;
@@ -21,30 +23,17 @@ final class Mp4MediaType {
         if (depth > 4) throw new IllegalArgumentException("Invalid MP4 container nesting");
         int tracks = 0;
         for (long position = start; position < end;) {
-            if (end - position < 8) throw new IllegalArgumentException("Incomplete MP4 box header");
-            input.seek(position);
-            long size = Integer.toUnsignedLong(input.readInt());
-            int type = input.readInt();
-            long header = 8;
-            if (size == 1) {
-                if (end - position < 16) throw new IllegalArgumentException("Incomplete MP4 extended header");
-                size = input.readLong();
-                header = 16;
-            } else if (size == 0) {
-                size = end - position;
-            }
-            if (size < header || size > end - position) {
-                throw new IllegalArgumentException("Invalid MP4 box size");
-            }
+            Mp4Boxes.Box box = Mp4Boxes.read(input, position, end);
+            int type = box.type();
             if (type == 0x6d6f6f76 || type == 0x7472616b || type == 0x6d646961) { // moov/trak/mdia
-                tracks |= scan(input, position + header, position + size, depth + 1);
-            } else if (type == 0x68646c72 && depth == 3 && size >= header + 12) { // hdlr
-                input.seek(position + header + 8); // full-box flags + predefined
+                tracks |= scan(input, box.contentStart(), box.end(), depth + 1);
+            } else if (type == 0x68646c72 && depth == 3 && box.size() >= box.headerSize() + 12) { // hdlr
+                input.seek(box.contentStart() + 8); // full-box flags + predefined
                 int handler = input.readInt();
                 if (handler == 0x736f756e) tracks |= 1; // soun
                 if (handler == 0x76696465) tracks |= 2; // vide
             }
-            position += size;
+            position = box.end();
         }
         return tracks;
     }

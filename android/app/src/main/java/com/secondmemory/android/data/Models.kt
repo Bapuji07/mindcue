@@ -62,3 +62,20 @@ data class MemoriesUiState(
     val busy: Boolean = false,
     val error: String? = null
 )
+
+/** The account's metered usage, from GET /api/v1/usage. Reset times are ISO-8601 UTC instants. */
+data class UsageInfo(
+    val unlimited: Boolean,
+    val audioMinutesUsed: Int,
+    val audioMinutesLimit: Int,
+    val audioResetsAt: String,
+    val aiRequestsToday: Int,
+    val aiRequestsLimit: Int,
+    val aiResetsAt: String,
+    val maxRecordingMinutes: Int
+) {
+    val audioMinutesLeft: Int get() = if (unlimited) Int.MAX_VALUE else (audioMinutesLimit - audioMinutesUsed).coerceAtLeast(0)
+
+    /** Longest recording that can still be processed right now. */
+    val recordableMinutes: Int get() = minOf(audioMinutesLeft, maxRecordingMinutes)
+}

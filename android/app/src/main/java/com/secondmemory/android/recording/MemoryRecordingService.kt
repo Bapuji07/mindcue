@@ -44,20 +44,24 @@ class MemoryRecordingService : Service() {
     private var outputFile: File? = null
     private var startedElapsed = 0L
     private var startedAt = ""
+    private var maxSeconds = 0L
+    private var stoppedAtLimit = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_ACTIVATE -> startRecording()
+            ACTION_ACTIVATE -> startRecording(intent.getLongExtra(EXTRA_MAX_SECONDS, 0L))
             ACTION_DEACTIVATE -> stopAndProcess()
             ACTION_RETRY -> intent.getStringExtra(EXTRA_AUDIO_PATH)?.let { process(File(it)) }
         }
         return START_NOT_STICKY
     }
 
-    private fun startRecording() {
+    private fun startRecording(maxSeconds: Long) {
         if (recorder != null || processing.get()) return
+        this.maxSeconds = maxSeconds
+        stoppedAtLimit = false
         createChannel()
         try {
             val directory = File(filesDir, "recordings").apply { mkdirs() }
@@ -89,7 +93,14 @@ class MemoryRecordingService : Service() {
     private val ticker = object : Runnable {
         override fun run() {
             if (recorder != null) {
-                MemoryState.active((SystemClock.elapsedRealtime() - startedElapsed) / 1000)
+                val elapsed = (SystemClock.elapsedRealtime() - startedElapsed) / 1000
+                if (maxSeconds > 0 && elapsed >= maxSeconds) {
+                    // The account can't process anything longer, so stop here and process what we have.
+                    stoppedAtLimit = true
+                    stopAndProcess()
+                    return
+                }
+                MemoryState.active(elapsed)
                 handler.postDelayed(this, 1000)
             }
         }
@@ -149,7 +160,11 @@ class MemoryRecordingService : Service() {
                 AppSettings.saveLastResult(this@MemoryRecordingService, result)
                 AppSettings.clearPending(this@MemoryRecordingService)
                 MemoryState.ready(result, file.absolutePath)
-                finalNotification("Memory ready", "${result.memories.size} memories extracted")
+                finalNotification(
+                    "Memory ready",
+                    (if (stoppedAtLimit) "Stopped at your recording limit. " else "") +
+                        "${result.memories.size} memories extracted"
+                )
             } catch (ex: AuthException) {
                 AppSettings.clearSession(this@MemoryRecordingService)
                 MemoryState.failure("Your session expired. Open the app to sign in again.", file.absolutePath)
@@ -244,11 +259,14 @@ class MemoryRecordingService : Service() {
         private const val ACTION_DEACTIVATE = "com.secondmemory.DEACTIVATE"
         private const val ACTION_RETRY = "com.secondmemory.RETRY"
         private const val EXTRA_AUDIO_PATH = "audio_path"
+        private const val EXTRA_MAX_SECONDS = "max_seconds"
         private const val POLL_INTERVAL_MS = 4_000L
         private const val POLL_TIMEOUT_MS = 15 * 60 * 1_000L
 
-        fun activate(context: Context) = ContextCompat.startForegroundService(context,
-            Intent(context, MemoryRecordingService::class.java).setAction(ACTION_ACTIVATE))
+        /** Starts recording; it stops on its own after [maxSeconds] (0 = no limit). */
+        fun activate(context: Context, maxSeconds: Long) = ContextCompat.startForegroundService(context,
+            Intent(context, MemoryRecordingService::class.java).setAction(ACTION_ACTIVATE)
+                .putExtra(EXTRA_MAX_SECONDS, maxSeconds))
         fun deactivate(context: Context) = context.startService(
             Intent(context, MemoryRecordingService::class.java).setAction(ACTION_DEACTIVATE))
         fun retry(context: Context, path: String) = ContextCompat.startForegroundService(context,

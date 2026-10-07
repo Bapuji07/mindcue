@@ -6,6 +6,7 @@ import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.ResultJson
 import com.secondmemory.android.data.ConversationDetail
 import com.secondmemory.android.data.ConversationSession
+import com.secondmemory.android.data.UsageInfo
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -33,6 +34,20 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         }
         val json = request("POST", "api/v1/auth/login", body)
         return LoginResult(json.getString("token"), json.getString("userId"), json.getString("username"))
+    }
+
+    fun usage(): UsageInfo {
+        val json = request("GET", "api/v1/usage")
+        return UsageInfo(
+            unlimited = json.optBoolean("unlimited"),
+            audioMinutesUsed = json.optInt("audioMinutesUsed"),
+            audioMinutesLimit = json.optInt("audioMinutesLimit"),
+            audioResetsAt = json.optString("audioResetsAt"),
+            aiRequestsToday = json.optInt("aiRequestsToday"),
+            aiRequestsLimit = json.optInt("aiRequestsLimit"),
+            aiResetsAt = json.optString("aiResetsAt"),
+            maxRecordingMinutes = json.optInt("maxRecordingMinutes", 60)
+        )
     }
 
     fun register(username: String, password: String): LoginResult {
@@ -221,6 +236,7 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
                 val friendly = message?.takeIf { it.isNotBlank() } ?: "Backend returned HTTP $code"
                 if (code == 401) throw AuthException(friendly)
                 if (code == 409) throw ConflictException(friendly)
+                if (code == 429) throw LimitException(friendly)
                 throw BackendException(friendly)
             }
             raw
@@ -236,3 +252,5 @@ open class BackendException(message: String) : Exception(message)
 class AuthException(message: String) : BackendException(message)
 /** The request clashes with the current server state, e.g. the conversation is already processing. */
 class ConflictException(message: String) : BackendException(message)
+/** A usage limit or rate limit was reached; the message says which and when it resets. */
+class LimitException(message: String) : BackendException(message)

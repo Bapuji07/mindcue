@@ -1,16 +1,32 @@
 @host = http://localhost:8081
-@userId = 11111111-1111-1111-1111-111111111111
+@username = REPLACE_WITH_YOUR_USERNAME
+@password = REPLACE_WITH_YOUR_PASSWORD
+# Paste the "token" from the login response.
+@token = REPLACE_AFTER_LOGIN
 @sessionId = REPLACE_AFTER_CREATE
 
 ### Health
 GET {{host}}/api/v1/health
 
-### Create a memory session
-POST {{host}}/api/v1/memory/sessions
+### Log in (or POST /api/v1/auth/register with the same body to create an account)
+POST {{host}}/api/v1/auth/login
 Content-Type: application/json
 
 {
-  "userId": "{{userId}}",
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+### Usage and limits for this account
+GET {{host}}/api/v1/usage
+Authorization: Bearer {{token}}
+
+### Create a memory session
+POST {{host}}/api/v1/memory/sessions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
   "title": "Audio MVP test",
   "startedAt": "2026-09-12T19:30:00+05:30",
   "timezone": "Asia/Kolkata",
@@ -18,38 +34,40 @@ Content-Type: application/json
 }
 
 ### Upload an audio file
-# Replace the path with a real .m4a/.mp3/.wav recording.
+# Must be a real .m4a/.mp4 recording; its length is measured on the server and counts toward the monthly limit.
 POST {{host}}/api/v1/memory/sessions/{{sessionId}}/audio
+Authorization: Bearer {{token}}
 Content-Type: multipart/form-data; boundary=SecondMemoryBoundary
 
 --SecondMemoryBoundary
 Content-Disposition: form-data; name="file"; filename="test.m4a"
-Content-Type: audio/m4a
+Content-Type: audio/mp4
 
 < ./test.m4a
 --SecondMemoryBoundary--
 
-### Transcribe uploaded audio only
-POST {{host}}/api/v1/memory/sessions/{{sessionId}}/transcribe
-
-### List automatically created transcript chunks
-GET {{host}}/api/v1/memory/sessions/{{sessionId}}/transcript-chunks
-
-### Extract memories from transcript
-POST {{host}}/api/v1/memory/sessions/{{sessionId}}/extract
-
-### OR: one call after upload = transcribe + extract
+### Transcribe + extract in the background (202), then poll the detail below
 POST {{host}}/api/v1/memory/sessions/{{sessionId}}/process
+Authorization: Bearer {{token}}
+
+### Session detail: status becomes COMPLETED or FAILED
+GET {{host}}/api/v1/memory/sessions/{{sessionId}}/detail
+Authorization: Bearer {{token}}
+
+### Transcript chunks
+GET {{host}}/api/v1/memory/sessions/{{sessionId}}/transcript-chunks
+Authorization: Bearer {{token}}
 
 ### List memories
-GET {{host}}/api/v1/memory/memories?userId={{userId}}
+GET {{host}}/api/v1/memory/memories
+Authorization: Bearer {{token}}
 
 ### Ask memory (works without pgvector using MVP keyword retrieval)
 POST {{host}}/api/v1/memory/ask
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "userId": "{{userId}}",
   "question": "What did I promise to check about the Shopify discount?",
   "topK": 5
 }

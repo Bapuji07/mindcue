@@ -79,6 +79,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.secondmemory.android.data.MemoriesUiState
+import com.secondmemory.android.data.UsageInfo
 import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.ConversationSession
@@ -142,11 +143,13 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
     val username by vm.username.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
+    val usage by vm.usage.collectAsStateWithLifecycle()
     val memoryActions = remember(vm) { MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory) }
     val context = LocalContext.current
     var pageName by rememberSaveable { mutableStateOf(AppPage.HOME.name) }
     var permissionError by remember { mutableStateOf<String?>(null) }
     val page = AppPage.valueOf(pageName)
+    LaunchedEffect(page) { if (page != AppPage.MEMORIES) vm.refreshUsage() }
 
     val permissions = buildList {
         add(Manifest.permission.RECORD_AUDIO)
@@ -204,7 +207,7 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
         when {
             focusMode -> FocusScreen(Modifier.padding(padding), state) { vm.deactivate(context) }
             page == AppPage.HOME -> HomeScreen(
-                Modifier.padding(padding), state, permissionError, activate,
+                Modifier.padding(padding), state, usage, permissionError, activate,
                 { state.lastAudioPath?.let { vm.retry(context, it) } },
                 vm::discardRecording,
                 { pageName = AppPage.MEMORIES.name }
@@ -215,7 +218,7 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                 vm::openConversation, vm::closeConversation, vm::renameConversation,
                 vm::deleteConversation, vm::retrySession
             )
-            else -> SettingsScreen(Modifier.padding(padding), username, vm::logout)
+            else -> SettingsScreen(Modifier.padding(padding), username, usage, vm::logout)
         }
     }
 }
@@ -303,6 +306,7 @@ private fun LoginScreen(
 private fun HomeScreen(
     modifier: Modifier,
     state: MemoryUiState,
+    usage: UsageInfo?,
     permissionError: String?,
     onActivate: () -> Unit,
     onRetry: () -> Unit,
@@ -342,7 +346,7 @@ private fun HomeScreen(
                     .shadow(14.dp, CircleShape, spotColor = Evergreen)
                     .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)))
-                    .clickable(onClick = onActivate),
+                    .clickable(enabled = usage == null || usage.recordableMinutes > 0, onClick = onActivate),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -358,6 +362,17 @@ private fun HomeScreen(
                         fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = Color.White
                     )
                 }
+            }
+        }
+        usage?.takeIf { !it.unlimited }?.let { info ->
+            item {
+                val left = info.audioMinutesLeft
+                Text(
+                    if (left > 0) "$left min of recording left this month"
+                    else "No recording minutes left this month. They reset on ${resetDate(info.audioResetsAt)}.",
+                    color = if (left > 0) Muted else ErrorRed, textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
         }
         permissionError?.let { item { InlineMessage(it, ErrorRed) } }
@@ -758,7 +773,7 @@ private fun ConversationDetailScreen(
 }
 
 @Composable
-private fun SettingsScreen(modifier: Modifier, username: String?, onLogout: () -> Unit) {
+private fun SettingsScreen(modifier: Modifier, username: String?, usage: UsageInfo?, onLogout: () -> Unit) {
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -793,7 +808,53 @@ private fun SettingsScreen(modifier: Modifier, username: String?, onLogout: () -
                 }
             }
         }
+        usage?.let { info -> item { UsageCard(info) } }
     }
+}
+
+@Composable
+private fun UsageCard(usage: UsageInfo) {
+    SurfaceCard {
+        Text("Usage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        if (usage.unlimited) {
+            Text("Unlimited account", color = Evergreen, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text("${usage.audioMinutesUsed} min recorded this month, ${usage.aiRequestsToday} questions today.", color = Muted)
+            return@SurfaceCard
+        }
+        Spacer(Modifier.height(10.dp))
+        UsageMeter(
+            "Recording this month", usage.audioMinutesUsed, usage.audioMinutesLimit, "min",
+            "Resets ${resetDate(usage.audioResetsAt)}"
+        )
+        Spacer(Modifier.height(14.dp))
+        UsageMeter(
+            "Ask Memory today", usage.aiRequestsToday, usage.aiRequestsLimit, "questions",
+            "Resets daily"
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("Each recording can be up to ${usage.maxRecordingMinutes} minutes.", color = Muted,
+            style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun UsageMeter(label: String, used: Int, limit: Int, unit: String, footnote: String) {
+    val fraction = if (limit <= 0) 1f else (used.toFloat() / limit).coerceIn(0f, 1f)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontWeight = FontWeight.SemiBold)
+        Text("${used.coerceAtMost(limit)} / $limit $unit", color = if (fraction >= 1f) ErrorRed else Muted)
+    }
+    Spacer(Modifier.height(6.dp))
+    LinearProgressIndicator(
+        progress = { fraction },
+        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+        color = if (fraction >= 1f) ErrorRed else Evergreen,
+        trackColor = Mint
+    )
+    Spacer(Modifier.height(4.dp))
+    Text(footnote, color = Muted, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

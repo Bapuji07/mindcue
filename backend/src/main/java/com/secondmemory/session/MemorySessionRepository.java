@@ -65,12 +65,12 @@ public class MemorySessionRepository {
         jdbc.update("DELETE FROM memory_session WHERE id = ? AND user_id = ?", id, userId);
     }
 
-    public void markAudioReceived(UUID id, String audioUri) {
+    public void markAudioReceived(UUID id, String audioUri, int durationSeconds) {
         jdbc.update("""
                 UPDATE memory_session
-                SET audio_uri = ?, status = ?, updated_at = NOW()
+                SET audio_uri = ?, duration_seconds = ?, status = ?, updated_at = NOW()
                 WHERE id = ?
-                """, audioUri, SessionStatus.AUDIO_RECEIVED.name(), id);
+                """, audioUri, durationSeconds, SessionStatus.AUDIO_RECEIVED.name(), id);
     }
 
     public void finish(UUID id, Instant endedAt, Integer durationSeconds) {
@@ -88,17 +88,25 @@ public class MemorySessionRepository {
      * Atomically moves a session into PROCESSING if nothing is working on it: it has audio or a
      * transcript waiting, it failed, or an in-progress run has not moved for 10 minutes (e.g. the
      * server restarted mid-run). Returns false when a run is already active or the session is
-     * already COMPLETED. Concurrent callers serialize on the row, so only one of them wins.
+     * already COMPLETED, or the session has used up its {@code maxAttempts}. Each successful claim
+     * counts one attempt. Concurrent callers serialize on the row, so only one of them wins.
      */
-    public boolean claimForProcessing(UUID id, UUID userId) {
+    public boolean claimForProcessing(UUID id, UUID userId, int maxAttempts) {
         return jdbc.update("""
                 UPDATE memory_session
-                SET status = 'PROCESSING', error_message = NULL, updated_at = NOW()
-                WHERE id = ? AND user_id = ?
+                SET status = 'PROCESSING', error_message = NULL, updated_at = NOW(),
+                    processing_attempts = processing_attempts + 1
+                WHERE id = ? AND user_id = ? AND processing_attempts < ?
                   AND (status IN ('AUDIO_RECEIVED', 'TRANSCRIPTION_COMPLETE', 'FAILED')
                        OR (status IN ('TRANSCRIBING', 'PROCESSING')
                            AND updated_at < NOW() - INTERVAL '10 minutes'))
-                """, id, userId) == 1;
+                """, id, userId, maxAttempts) == 1;
+    }
+
+    public int processingAttempts(UUID id) {
+        Integer attempts = jdbc.queryForObject(
+                "SELECT processing_attempts FROM memory_session WHERE id = ?", Integer.class, id);
+        return attempts == null ? 0 : attempts;
     }
 
     public void clearAudioUri(UUID id) {

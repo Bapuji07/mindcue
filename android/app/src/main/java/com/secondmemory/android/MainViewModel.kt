@@ -8,11 +8,13 @@ import com.secondmemory.android.data.AppSettings
 import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.MemoriesUiState
 import com.secondmemory.android.data.MemoryItem
+import com.secondmemory.android.data.UsageInfo
 import com.secondmemory.android.network.AuthException
 import com.secondmemory.android.network.BackendClient
 import com.secondmemory.android.network.ConflictException
 import com.secondmemory.android.network.LoginResult
 import com.secondmemory.android.recording.MemoryRecordingService
+import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import com.secondmemory.android.state.MemoryUiState
@@ -42,6 +46,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableUsername = MutableStateFlow(AppSettings.username(application))
     val username: StateFlow<String?> = mutableUsername.asStateFlow()
 
+    private val mutableUsage = MutableStateFlow<UsageInfo?>(null)
+    val usage: StateFlow<UsageInfo?> = mutableUsage.asStateFlow()
+
     private val mutableMemories = MutableStateFlow(MemoriesUiState())
     val memories: StateFlow<MemoriesUiState> = mutableMemories.asStateFlow()
     private val pollJobs = ConcurrentHashMap<String, Job>()
@@ -51,6 +58,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // retryable across app restarts as long as its audio file still exists.
         val pending = AppSettings.pendingAudio(application)?.takeIf { File(it).exists() }
         MemoryState.restore(AppSettings.lastResult(application), AppSettings.lastAudio(application), pending)
+        if (mutableAuth.value) refreshUsage()
+        // A finished recording has used minutes, so refresh what's left.
+        viewModelScope.launch {
+            MemoryState.state.map { it.mode }.distinctUntilChanged().collect { mode ->
+                if (mode == MemoryMode.READY && mutableAuth.value) refreshUsage()
+            }
+        }
+    }
+
+    /** Reloads the account's usage; failures keep the last known value (the server enforces limits anyway). */
+    fun refreshUsage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().usage() }
+                .onSuccess { mutableUsage.value = it }
+                .onFailure { if (it is AuthException) handleAuthFailure() }
+        }
     }
 
     private fun client(): BackendClient {
@@ -84,6 +107,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mutableUsername.value = result.username
                 mutableLoggingIn.value = false
                 mutableAuth.value = true
+                refreshUsage()
             }.onFailure { error ->
                 mutableLoggingIn.value = false
                 mutableLoginError.value = error.message ?: "Could not sign in"
@@ -92,14 +116,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
+        mutableUsage.value = null
         AppSettings.clearSession(getApplication())
         mutableAuth.value = false
         mutableUsername.value = null
     }
 
     fun activate(context: Context) {
+        val usage = mutableUsage.value
+        if (usage != null && usage.recordableMinutes <= 0) {
+            MemoryState.failure("You've used this month's recording minutes. They reset on ${resetDate(usage.audioResetsAt)}.")
+            return
+        }
+        // Stop automatically before the recording outgrows what the account can still process.
+        val maxSeconds = (usage?.recordableMinutes ?: DEFAULT_MAX_RECORDING_MINUTES) * 60L
         try {
-            MemoryRecordingService.activate(context)
+            MemoryRecordingService.activate(context, maxSeconds)
         } catch (ex: Exception) { MemoryState.failure(ex.message ?: "Could not activate Memory") }
     }
 
@@ -128,6 +160,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (ex: Exception) {
                 MemoryState.askFailure(ex.message ?: "Could not ask Memory")
             }
+            refreshUsage()
         }
     }
 
@@ -358,4 +391,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    private companion object {
+        const val DEFAULT_MAX_RECORDING_MINUTES = 60
+    }
 }
+
+/** "1 Nov" style date for a reset instant, or the raw value if it can't be parsed. */
+fun resetDate(instant: String): String = runCatching {
+    java.time.format.DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault())
+        .withZone(java.time.ZoneId.systemDefault()).format(Instant.parse(instant))
+}.getOrDefault(instant)

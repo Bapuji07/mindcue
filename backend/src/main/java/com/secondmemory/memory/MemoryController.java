@@ -1,6 +1,5 @@
 package com.secondmemory.memory;
 
-import com.secondmemory.ai.dto.ExtractedMemoryResponse;
 import com.secondmemory.auth.CurrentUser;
 import com.secondmemory.common.NotFoundException;
 import jakarta.validation.Valid;
@@ -14,12 +13,10 @@ import java.util.UUID;
 @RequestMapping("/api/v1/memory")
 public class MemoryController {
     private final MemoryRepository repository;
-    private final MemoryExtractionService extractionService;
     private final MemoryAnswerService answerService;
 
-    public MemoryController(MemoryRepository repository, MemoryExtractionService extractionService, MemoryAnswerService answerService) {
+    public MemoryController(MemoryRepository repository, MemoryAnswerService answerService) {
         this.repository = repository;
-        this.extractionService = extractionService;
         this.answerService = answerService;
     }
 
@@ -71,10 +68,5 @@ public class MemoryController {
                 .orElseThrow(() -> new NotFoundException("Memory not found: " + id));
         repository.update(id, userId, request);
         return repository.findByIdAndUser(id, userId).orElseThrow();
-    }
-
-    @PostMapping("/sessions/{sessionId}/extract")
-    public ExtractedMemoryResponse extract(@PathVariable UUID sessionId, Authentication auth) {
-        return extractionService.extract(sessionId, CurrentUser.id(auth));
     }
 }

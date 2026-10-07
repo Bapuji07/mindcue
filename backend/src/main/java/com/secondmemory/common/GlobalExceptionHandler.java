@@ -1,5 +1,6 @@
 package com.secondmemory.common;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -9,6 +10,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.time.Instant;
 
 @RestControllerAdvice
@@ -40,6 +42,16 @@ public class GlobalExceptionHandler {
     ResponseEntity<ApiError> handleNotFound(NotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ApiError("NOT_FOUND", ex.getMessage(), Instant.now()));
+    }
+
+    @ExceptionHandler(LimitExceededException.class)
+    ResponseEntity<ApiError> handleLimit(LimitExceededException ex) {
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS);
+        if (ex.resetsAt() != null) {
+            long seconds = Math.max(1, Duration.between(Instant.now(), ex.resetsAt()).getSeconds());
+            response.header(HttpHeaders.RETRY_AFTER, Long.toString(seconds));
+        }
+        return response.body(new ApiError("LIMIT_EXCEEDED", ex.getMessage(), Instant.now()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

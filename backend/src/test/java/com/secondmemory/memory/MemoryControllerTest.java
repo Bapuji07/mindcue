@@ -20,7 +20,7 @@ class MemoryControllerTest {
     private final Authentication auth = new UsernamePasswordAuthenticationToken(userId.toString(), null, List.of());
     private final MemoryRepository repository = mock(MemoryRepository.class);
     private final MemoryController controller =
-            new MemoryController(repository, mock(MemoryExtractionService.class), mock(MemoryAnswerService.class));
+            new MemoryController(repository, mock(MemoryAnswerService.class));
 
     @Test
     void deleteUnknownMemoryIsNotFound() {

@@ -1,10 +1,14 @@
 package com.secondmemory.android
 
 import android.Manifest
+import android.content.Context
+import android.text.format.DateFormat
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +26,9 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +37,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.Logout
@@ -62,6 +70,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -69,6 +78,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -76,6 +88,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.secondmemory.android.data.MemoriesUiState
@@ -87,27 +100,58 @@ import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryUiState
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
+        // Draw behind the system bars (enforced from Android 15); Scaffold applies the insets.
+        enableEdgeToEdge()
         setContent { SecondMemoryTheme { SecondMemoryApp() } }
     }
 }
 
+// Brand colours, used for the hero gradient and avatar in both light and dark themes.
 private val Evergreen = Color(0xFF176B52)
 private val EvergreenDark = Color(0xFF0F4E3B)
 private val DeepGreen = Color(0xFF10231D)
-private val Mint = Color(0xFFE5F4EC)
-private val Canvas = Color(0xFFF7F8F5)
-private val Muted = Color(0xFF66756F)
-private val ErrorRed = Color(0xFFB3261E)
 private val Accent = Color(0xFF7FE0B2)
-private val CardBorder = Color(0x140F4E3B)
+
+private val LightColors = lightColorScheme(
+    primary = Evergreen, onPrimary = Color.White,
+    primaryContainer = Color(0xFFE5F4EC), onPrimaryContainer = DeepGreen,
+    tertiary = Color(0xFF8A5A00),
+    background = Color(0xFFF7F8F5), onBackground = DeepGreen,
+    surface = Color.White, onSurface = DeepGreen, onSurfaceVariant = Color(0xFF5E6D67),
+    outlineVariant = Color(0xFFE1E7E3),
+    error = Color(0xFFB3261E), onError = Color.White
+)
+
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF7FD6AE), onPrimary = Color(0xFF00382A),
+    primaryContainer = Color(0xFF1E4A3B), onPrimaryContainer = Color(0xFFC6F1DC),
+    tertiary = Color(0xFFF2C26B),
+    background = Color(0xFF0E1412), onBackground = Color(0xFFDDE5E0),
+    surface = Color(0xFF172019), onSurface = Color(0xFFDDE5E0), onSurfaceVariant = Color(0xFFA3B2AB),
+    outlineVariant = Color(0xFF2B3631),
+    error = Color(0xFFF2B8B5), onError = Color(0xFF601410)
+)
+
+// Theme roles under the names the screens use, so every screen follows light/dark automatically.
+private val Primary: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primary
+private val Canvas: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.background
+private val CardColor: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.surface
+private val Mint: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primaryContainer
+private val Muted: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val ErrorRed: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.error
+private val Warning: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.tertiary
+private val CardBorder: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.outlineVariant
 
 private enum class AppPage(val label: String, val outlineIcon: ImageVector, val filledIcon: ImageVector) {
     HOME("Home", Icons.Outlined.Home, Icons.Filled.Home),
@@ -118,12 +162,7 @@ private enum class AppPage(val label: String, val outlineIcon: ImageVector, val 
 @Composable
 private fun SecondMemoryTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = Evergreen, onPrimary = Color.White, primaryContainer = Mint,
-            onPrimaryContainer = DeepGreen, background = Canvas, surface = Color.White,
-            onBackground = DeepGreen, onSurface = DeepGreen, onSurfaceVariant = Muted,
-            error = ErrorRed
-        ),
+        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
         content = content
     )
 }
@@ -170,23 +209,49 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
         } else permissionLauncher.launch(permissions)
     }
     val focusMode = state.mode == MemoryMode.ACTIVE || state.mode == MemoryMode.PROCESSING
+    val inDetail = page == AppPage.MEMORIES && history.selected != null
+
+    // System back: conversation detail -> list -> Home tab, then leave the app.
+    BackHandler(enabled = !focusMode && (inDetail || page != AppPage.HOME)) {
+        if (inDetail) vm.closeConversation() else pageName = AppPage.HOME.name
+    }
 
     Scaffold(
         containerColor = Canvas,
         topBar = {
             TopAppBar(
-                title = { Text(if (focusMode) "MindCue" else page.label, fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        when {
+                            focusMode -> "MindCue"
+                            inDetail -> "Conversation"
+                            else -> page.label
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    if (inDetail && !focusMode) {
+                        IconButton(onClick = vm::closeConversation) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Canvas)
             )
         },
         bottomBar = {
             if (!focusMode) {
-                NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
+                NavigationBar(containerColor = CardColor, tonalElevation = 0.dp) {
                     AppPage.entries.forEach { destination ->
                         val selected = page == destination
                         NavigationBarItem(
                             selected = selected,
-                            onClick = { pageName = destination.name },
+                            onClick = {
+                                // Re-selecting Memories while a conversation is open returns to the list.
+                                if (destination == AppPage.MEMORIES && inDetail) vm.closeConversation()
+                                pageName = destination.name
+                            },
                             icon = {
                                 Icon(
                                     if (selected) destination.filledIcon else destination.outlineIcon,
@@ -195,7 +260,7 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
                             },
                             label = { Text(destination.label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = Evergreen, selectedTextColor = Evergreen,
+                                selectedIconColor = Primary, selectedTextColor = Primary,
                                 indicatorColor = Mint, unselectedIconColor = Muted, unselectedTextColor = Muted
                             )
                         )
@@ -204,21 +269,23 @@ private fun SecondMemoryApp(vm: MainViewModel = viewModel()) {
             }
         }
     ) { padding ->
+        // Keep content clear of the system bars and of the keyboard when a text field is focused.
+        val content = Modifier.padding(padding).consumeWindowInsets(padding).imePadding()
         when {
-            focusMode -> FocusScreen(Modifier.padding(padding), state) { vm.deactivate(context) }
+            focusMode -> FocusScreen(content, state) { vm.deactivate(context) }
             page == AppPage.HOME -> HomeScreen(
-                Modifier.padding(padding), state, usage, permissionError, activate,
+                content, state, usage, permissionError, activate,
                 { state.lastAudioPath?.let { vm.retry(context, it) } },
                 vm::discardRecording,
                 { pageName = AppPage.MEMORIES.name }
             )
             page == AppPage.MEMORIES -> MemoriesScreen(
-                Modifier.padding(padding), state, history, memories, memoryActions,
+                content, state, history, memories, memoryActions,
                 vm::ask, vm::refreshMemories, vm::searchMemories, vm::clearSearch, vm::setOverdueOnly,
-                vm::openConversation, vm::closeConversation, vm::renameConversation,
+                vm::openConversation, vm::renameConversation,
                 vm::deleteConversation, vm::retrySession
             )
-            else -> SettingsScreen(Modifier.padding(padding), username, usage, vm::logout)
+            else -> SettingsScreen(content, username, usage, vm::logout)
         }
     }
 }
@@ -235,9 +302,13 @@ private fun LoginScreen(
     var password by rememberSaveable { mutableStateOf("") }
     var registerMode by rememberSaveable { mutableStateOf(false) }
     Scaffold(containerColor = Canvas) { padding ->
+        Box(
+            Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+            contentAlignment = Alignment.Center
+        ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 28.dp),
-            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(horizontal = 28.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -255,7 +326,7 @@ private fun LoginScreen(
             )
             Spacer(Modifier.height(28.dp))
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color.White),
+                colors = CardDefaults.cardColors(containerColor = CardColor),
                 shape = RoundedCornerShape(24.dp),
                 border = BorderStroke(1.dp, CardBorder),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -286,10 +357,9 @@ private fun LoginScreen(
                         onClick = { if (registerMode) onRegister(username, password) else onLogin(username, password) },
                         enabled = !loggingIn && username.isNotBlank() &&
                             (if (registerMode) password.length >= 8 else password.isNotBlank()),
-                        colors = ButtonDefaults.buttonColors(containerColor = Evergreen),
-                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
                     ) {
-                        if (loggingIn) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+                        if (loggingIn) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
                         else Text(if (registerMode) "Create account" else "Sign in", fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -298,6 +368,7 @@ private fun LoginScreen(
             TextButton(onClick = { registerMode = !registerMode }) {
                 Text(if (registerMode) "Already have an account? Sign in" else "Don't have an account? Create one")
             }
+        }
         }
     }
 }
@@ -340,13 +411,17 @@ private fun HomeScreen(
             Text("Activate Memory when a conversation matters.", color = Muted, textAlign = TextAlign.Center)
         }
         item {
+            val canRecord = usage == null || usage.recordableMinutes > 0
             Box(
                 modifier = Modifier
-                    .size(190.dp)
-                    .shadow(14.dp, CircleShape, spotColor = Evergreen)
+                    .widthIn(min = 190.dp)
+                    .aspectRatio(1f)
+                    .alpha(if (canRecord) 1f else 0.45f)
+                    .shadow(if (canRecord) 14.dp else 0.dp, CircleShape, spotColor = Evergreen)
                     .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)))
-                    .clickable(enabled = usage == null || usage.recordableMinutes > 0, onClick = onActivate),
+                    .clickable(enabled = canRecord, role = Role.Button, onClickLabel = "Start recording", onClick = onActivate)
+                    .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -358,8 +433,9 @@ private fun HomeScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "Activate\nMemory", style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = Color.White
+                        "Activate Memory", style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = Color.White,
+                        modifier = Modifier.widthIn(max = 140.dp)
                     )
                 }
             }
@@ -405,9 +481,9 @@ private fun HomeScreen(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = Evergreen, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = Primary, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Latest memory", color = Evergreen, style = MaterialTheme.typography.labelLarge)
+                                Text("Latest memory", color = Primary, style = MaterialTheme.typography.labelLarge)
                             }
                             Spacer(Modifier.height(5.dp))
                             Text(
@@ -449,7 +525,7 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
                     Modifier.size(150.dp).scale(ringScale)
                         .background(Accent.copy(alpha = ringAlpha), CircleShape)
                 )
-                Box(Modifier.size(120.dp).background(DeepGreen, CircleShape), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(120.dp).background(Brush.linearGradient(listOf(Evergreen, EvergreenDark)), CircleShape), contentAlignment = Alignment.Center) {
                     Icon(Icons.Outlined.Mic, contentDescription = null, tint = Accent, modifier = Modifier.size(36.dp))
                 }
             }
@@ -458,18 +534,17 @@ private fun FocusScreen(modifier: Modifier, state: MemoryUiState, onDeactivate: 
             Spacer(Modifier.height(8.dp))
             Text(
                 formatDuration(state.elapsedSeconds), style = MaterialTheme.typography.displaySmall,
-                color = Evergreen, fontWeight = FontWeight.Bold
+                color = Primary, fontWeight = FontWeight.Bold
             )
             Spacer(Modifier.height(8.dp))
             Text("You can lock your phone. Listening will continue.", color = Muted, textAlign = TextAlign.Center)
             Spacer(Modifier.height(36.dp))
             Button(
-                onClick = onDeactivate, modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = DeepGreen)
+                onClick = onDeactivate, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                shape = RoundedCornerShape(16.dp)
             ) { Text("Deactivate Memory", fontWeight = FontWeight.SemiBold) }
         } else {
-            CircularProgressIndicator(Modifier.size(52.dp), strokeWidth = 4.dp, color = Evergreen)
+            CircularProgressIndicator(Modifier.size(52.dp), strokeWidth = 4.dp, color = Primary)
             Spacer(Modifier.height(24.dp))
             Text("Creating your memory", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
@@ -499,14 +574,13 @@ private fun MemoriesScreen(
     onClearSearch: () -> Unit,
     onOverdueChange: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
-    onClose: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
     onRetrySession: (String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     history.selected?.let {
-        ConversationDetailScreen(modifier, history, memories, actions, onClose, onRename, onDelete, onRetrySession)
+        ConversationDetailScreen(modifier, history, memories, actions, onRename, onDelete, onRetrySession)
         return
     }
     LazyColumn(
@@ -591,7 +665,7 @@ private fun SearchMemoriesCard(state: MemoriesUiState, onSearch: (String) -> Uni
             onClick = { onSearch(query) }, enabled = query.isNotBlank() && !state.searching,
             modifier = Modifier.fillMaxWidth()
         ) {
-            if (state.searching) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+            if (state.searching) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
             else Text("Search")
         }
     }
@@ -600,11 +674,12 @@ private fun SearchMemoriesCard(state: MemoriesUiState, onSearch: (String) -> Uni
 @Composable
 private fun ConversationCard(session: ConversationSession, onRetry: (() -> Unit)?, onClick: () -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = CardColor),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, CardBorder),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
@@ -620,7 +695,7 @@ private fun ConversationCard(session: ConversationSession, onRetry: (() -> Unit)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.CalendarToday, contentDescription = null, tint = Muted, modifier = Modifier.size(13.dp))
                 Spacer(Modifier.width(5.dp))
-                Text(formatDate(session.startedAt), color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(friendlyDateTime(session.startedAt), color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             session.summary?.let {
                 Spacer(Modifier.height(9.dp))
@@ -647,9 +722,9 @@ private fun ConversationCard(session: ConversationSession, onRetry: (() -> Unit)
 private fun StatusPill(status: String) {
     val label = status.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
     val color = when (status.uppercase()) {
-        "COMPLETED", "TRANSCRIPTION_COMPLETE" -> Evergreen
+        "COMPLETED", "TRANSCRIPTION_COMPLETE" -> Primary
         "FAILED" -> ErrorRed
-        else -> Color(0xFFB07E1E)
+        else -> Warning
     }
     Box(
         Modifier.background(color.copy(alpha = 0.12f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)
@@ -664,7 +739,6 @@ private fun ConversationDetailScreen(
     history: HistoryUiState,
     memories: MemoriesUiState,
     actions: MemoryActions,
-    onBack: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
     onRetry: (String) -> Unit
@@ -691,7 +765,7 @@ private fun ConversationDetailScreen(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item { TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) { Text("‹ Back to conversations") } }
+        item { Spacer(Modifier.height(4.dp)) }
         item {
             SurfaceCard {
                 if (editingTitle) {
@@ -715,7 +789,7 @@ private fun ConversationDetailScreen(
                         )
                         TextButton(onClick = { editingTitle = true }) { Text("Rename") }
                     }
-                    Text(formatDate(detail.session.startedAt), color = Muted)
+                    Text(friendlyDateTime(detail.session.startedAt), color = Muted)
                 }
             }
         }
@@ -802,7 +876,7 @@ private fun SettingsScreen(modifier: Modifier, username: String?, usage: UsageIn
                     }
                 }
                 Spacer(Modifier.height(18.dp))
-                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp)); Text("Log out")
                 }
@@ -818,7 +892,7 @@ private fun UsageCard(usage: UsageInfo) {
         Text("Usage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         if (usage.unlimited) {
-            Text("Unlimited account", color = Evergreen, fontWeight = FontWeight.SemiBold)
+            Text("Unlimited account", color = Primary, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
             Text("${usage.audioMinutesUsed} min recorded this month, ${usage.aiRequestsToday} questions today.", color = Muted)
             return@SurfaceCard
@@ -850,7 +924,7 @@ private fun UsageMeter(label: String, used: Int, limit: Int, unit: String, footn
     LinearProgressIndicator(
         progress = { fraction },
         modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-        color = if (fraction >= 1f) ErrorRed else Evergreen,
+        color = if (fraction >= 1f) ErrorRed else Primary,
         trackColor = Mint
     )
     Spacer(Modifier.height(4.dp))
@@ -863,15 +937,18 @@ private fun SectionTitle(title: String, detail: String? = null) {
         Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        detail?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = Evergreen) }
+        Text(
+            title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+            modifier = Modifier.semantics { heading() }
+        )
+        detail?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = Primary) }
     }
 }
 
 @Composable
 private fun SurfaceCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardColor), shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, CardBorder),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier.fillMaxWidth()
@@ -883,7 +960,7 @@ private fun EmptyCard(message: String, icon: ImageVector = Icons.Outlined.Histor
     SurfaceCard {
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(48.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = Evergreen, modifier = Modifier.size(24.dp))
+                Icon(icon, contentDescription = null, tint = Primary, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.height(12.dp))
             Text(message, color = Muted, textAlign = TextAlign.Center)
@@ -943,10 +1020,10 @@ private fun MemoryCard(
     SurfaceCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(28.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(memoryTypeIcon(memory.type), contentDescription = null, tint = Evergreen, modifier = Modifier.size(15.dp))
+                Icon(memoryTypeIcon(memory.type), contentDescription = null, tint = Primary, modifier = Modifier.size(15.dp))
             }
             Spacer(Modifier.width(8.dp))
-            Text(memory.type, color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            Text(memory.type, color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
             if (overdue) {
                 Spacer(Modifier.width(10.dp))
                 Text("Overdue", color = ErrorRed, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
@@ -961,7 +1038,7 @@ private fun MemoryCard(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 memory.dueAt?.let {
                     Text(
-                        "Due ${formatDue(it)}", style = MaterialTheme.typography.labelMedium,
+                        "Due ${friendlyDateTime(it)}", style = MaterialTheme.typography.labelMedium,
                         color = if (overdue) ErrorRed else MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -1013,7 +1090,7 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
     SurfaceCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(34.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Evergreen, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
             }
             Spacer(Modifier.width(10.dp))
             Text("Ask Memory", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -1031,7 +1108,7 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
             onClick = { onAsk(question) }, enabled = question.isNotBlank() && !state.asking,
             modifier = Modifier.fillMaxWidth()
         ) {
-            if (state.asking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+            if (state.asking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
             else {
                 Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp)); Text("Ask")
@@ -1045,7 +1122,7 @@ private fun AskMemoryCard(state: MemoryUiState, onAsk: (String) -> Unit) {
                     Text(result.answer, fontWeight = FontWeight.Medium)
                     if (result.sources.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
-                        Text("Sources", color = Evergreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                        Text("Sources", color = Primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
                         result.sources.forEach { source ->
                             Spacer(Modifier.height(8.dp))
                             Text(source.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1101,9 +1178,26 @@ private fun parseInstant(value: String?): Instant? =
 private fun isOverdue(memory: MemoryItem): Boolean =
     memory.resolutionStatus == "OPEN" && parseInstant(memory.dueAt)?.isBefore(Instant.now()) == true
 
-private val DueFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+/** "Today, 9:41 PM", "Yesterday, 21:41" or "Mon 5 Oct, 9:41 PM" in the phone's time zone and clock format. */
+@Composable
+private fun friendlyDateTime(value: String?): String {
+    val instant = parseInstant(value) ?: return value?.replace('T', ' ')?.take(16)?.ifBlank { null } ?: "Unknown date"
+    return formatWhen(instant, LocalContext.current)
+}
 
-private fun formatDue(value: String): String =
-    parseInstant(value)?.let { DueFormat.format(it) } ?: value.replace('T', ' ').take(16)
-
-private fun formatDate(value: String): String = value.replace('T', ' ').take(16).ifBlank { "Unknown date" }
+private fun formatWhen(instant: Instant, context: Context): String {
+    val zone = ZoneId.systemDefault()
+    val date = instant.atZone(zone).toLocalDate()
+    val today = LocalDate.now(zone)
+    val time = DateFormat.getTimeFormat(context).format(Date.from(instant))
+    val day = when (date) {
+        today -> "Today"
+        today.minusDays(1) -> "Yesterday"
+        today.plusDays(1) -> "Tomorrow"
+        else -> {
+            val skeleton = if (date.year == today.year) "EEEdMMM" else "dMMMyyyy"
+            DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(Locale.getDefault(), skeleton)).format(date)
+        }
+    }
+    return "$day, $time"
+}

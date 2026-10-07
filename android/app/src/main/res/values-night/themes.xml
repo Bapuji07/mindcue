@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.SecondMemory" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:colorAccent">#7FD6AE</item>
+    </style>
+</resources>

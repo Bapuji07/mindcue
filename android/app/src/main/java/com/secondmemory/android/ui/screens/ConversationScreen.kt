@@ -1,6 +1,9 @@
 package com.secondmemory.android.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,9 +35,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.secondmemory.android.R
+import com.secondmemory.android.data.ConversationDetail
 import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.MemoriesUiState
 import com.secondmemory.android.ui.canRetry
@@ -41,12 +49,14 @@ import com.secondmemory.android.ui.components.ActionableMemoryCard
 import com.secondmemory.android.ui.components.EmptyCard
 import com.secondmemory.android.ui.components.InlineMessage
 import com.secondmemory.android.ui.components.MemoryActions
+import com.secondmemory.android.ui.components.SelectableChip
 import com.secondmemory.android.ui.components.SectionTitle
 import com.secondmemory.android.ui.components.StatusPill
 import com.secondmemory.android.ui.components.SurfaceCard
 import com.secondmemory.android.ui.friendlyDateTime
 import com.secondmemory.android.ui.theme.ErrorColor
 import com.secondmemory.android.ui.theme.Muted
+import com.secondmemory.android.ui.theme.Primary
 
 /** One conversation: summary, its memories and the transcript. Rename/delete live in the top bar. */
 @Composable
@@ -55,10 +65,14 @@ internal fun ConversationScreen(
     history: HistoryUiState,
     memories: MemoriesUiState,
     actions: MemoryActions,
-    onRetry: (String) -> Unit
+    onRetry: (String) -> Unit,
+    onSelectSelfSpeaker: (String) -> Unit
 ) {
     val detail = history.selected ?: return
     var transcriptVisible by rememberSaveable(detail.session.id) { mutableStateOf(false) }
+    var choosingSpeaker by rememberSaveable(detail.session.id) { mutableStateOf(false) }
+    val selfSpeaker = detail.session.selfSpeaker
+    val speakers = detail.speakers
 
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
@@ -103,6 +117,26 @@ internal fun ConversationScreen(
                 }
             }
         }
+        // Who the user is decides which tasks are "yours"; only asked when there is a real choice.
+        if (speakers.size >= 2) {
+            item {
+                if (selfSpeaker == null || choosingSpeaker) {
+                    SpeakerChooser(speakers, selfSpeaker) { speaker ->
+                        choosingSpeaker = false
+                        if (speaker != selfSpeaker) onSelectSelfSpeaker(speaker)
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Person, contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.you_are_speaker, selfSpeaker), color = Muted, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { choosingSpeaker = true }, enabled = !history.mutating) {
+                            Text(stringResource(R.string.action_change))
+                        }
+                    }
+                }
+            }
+        }
         item {
             SectionTitle(stringResource(R.string.summary))
             Spacer(Modifier.height(8.dp))
@@ -122,9 +156,47 @@ internal fun ConversationScreen(
             }
         }
         if (transcriptVisible) {
-            item { SurfaceCard { Text(detail.transcript.ifBlank { stringResource(R.string.transcript_missing) }) } }
+            item { SurfaceCard { Transcript(detail, selfSpeaker) } }
         }
         item { Spacer(Modifier.height(20.dp)) }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SpeakerChooser(speakers: List<String>, selected: String?, onPick: (String) -> Unit) {
+    SurfaceCard {
+        Text(stringResource(R.string.which_speaker_title), fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(stringResource(R.string.which_speaker_text), color = Muted, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            speakers.forEach { speaker -> SelectableChip(speaker, selected = speaker == selected) { onPick(speaker) } }
+        }
+    }
+}
+
+/** One paragraph per speaker turn, the speaker in bold ("You" for the user). */
+@Composable
+private fun Transcript(detail: ConversationDetail, selfSpeaker: String?) {
+    if (detail.transcriptLines.none { it.speaker != null }) {
+        Text(detail.transcript.ifBlank { stringResource(R.string.transcript_missing) })
+        return
+    }
+    val you = stringResource(R.string.owner_you)
+    val speakerColor = Primary
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        detail.transcriptLines.forEach { line ->
+            Text(buildAnnotatedString {
+                line.speaker?.let { speaker ->
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = speakerColor)) {
+                        append(if (speaker == selfSpeaker) you else speaker)
+                        append(": ")
+                    }
+                }
+                append(line.text)
+            })
+        }
     }
 }
 

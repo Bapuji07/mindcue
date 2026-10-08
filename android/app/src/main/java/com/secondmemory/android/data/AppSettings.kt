@@ -16,6 +16,11 @@ object AppSettings {
     private const val PENDING_AUDIO = "pending_audio"
     private const val PENDING_UPLOADED = "pending_uploaded"
     private const val THEME_MODE = "theme_mode"
+    private const val REMINDERS_ENABLED = "reminders_enabled"
+    private const val DIGEST_ENABLED = "digest_enabled"
+    private const val DIGEST_MINUTE_OF_DAY = "digest_minute_of_day"
+    private const val SCHEDULED_REMINDERS = "scheduled_reminders"
+    private const val NOTIFICATION_CARD_DISMISSED = "notification_card_dismissed"
     private const val DATA_OWNER = "data_owner"
 
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -92,6 +97,30 @@ object AppSettings {
         prefs(context).getString(THEME_MODE, null)?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
 
     fun saveThemeMode(context: Context, mode: ThemeMode) = prefs(context).edit().putString(THEME_MODE, mode.name).apply()
+
+    // Notification preferences are device settings: they survive signing out.
+    fun remindersEnabled(context: Context): Boolean = prefs(context).getBoolean(REMINDERS_ENABLED, true)
+    fun setRemindersEnabled(context: Context, enabled: Boolean) =
+        prefs(context).edit().putBoolean(REMINDERS_ENABLED, enabled).apply()
+
+    fun digestEnabled(context: Context): Boolean = prefs(context).getBoolean(DIGEST_ENABLED, true)
+    fun setDigestEnabled(context: Context, enabled: Boolean) =
+        prefs(context).edit().putBoolean(DIGEST_ENABLED, enabled).apply()
+
+    /** Time of the morning summary as minutes after midnight (default 8:00). */
+    fun digestMinuteOfDay(context: Context): Int = prefs(context).getInt(DIGEST_MINUTE_OF_DAY, 8 * 60)
+    fun setDigestMinuteOfDay(context: Context, minute: Int) =
+        prefs(context).edit().putInt(DIGEST_MINUTE_OF_DAY, minute).apply()
+
+    /** Memory ids with a reminder alarm set, so alarms that are no longer wanted can be cancelled. */
+    fun scheduledReminders(context: Context): Set<String> =
+        prefs(context).getStringSet(SCHEDULED_REMINDERS, emptySet())?.toSet() ?: emptySet()
+    fun saveScheduledReminders(context: Context, ids: Set<String>) =
+        prefs(context).edit().putStringSet(SCHEDULED_REMINDERS, ids).apply()
+
+    fun notificationCardDismissed(context: Context): Boolean = prefs(context).getBoolean(NOTIFICATION_CARD_DISMISSED, false)
+    fun dismissNotificationCard(context: Context) =
+        prefs(context).edit().putBoolean(NOTIFICATION_CARD_DISMISSED, true).apply()
 
     /** The account whose results and pending recording are stored on this phone. */
     fun dataOwner(context: Context): String? = prefs(context).getString(DATA_OWNER, null)

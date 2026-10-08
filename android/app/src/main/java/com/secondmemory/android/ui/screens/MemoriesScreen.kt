@@ -88,11 +88,12 @@ internal fun MemoriesScreen(
     onQueryChange: (String) -> Unit,
     onClearQuery: () -> Unit,
     onOpen: (String) -> Unit,
-    onRetrySession: (String) -> Unit
+    onRetrySession: (String) -> Unit,
+    onSelectSelfSpeaker: (String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     if (history.selected != null) {
-        ConversationScreen(modifier, history, memories, actions, onRetrySession)
+        ConversationScreen(modifier, history, memories, actions, onRetrySession, onSelectSelfSpeaker)
         return
     }
     val query = memories.searchQuery

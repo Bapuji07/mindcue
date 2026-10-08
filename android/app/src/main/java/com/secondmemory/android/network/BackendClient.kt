@@ -6,6 +6,7 @@ import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.ResultJson
 import com.secondmemory.android.data.ConversationDetail
 import com.secondmemory.android.data.ConversationSession
+import com.secondmemory.android.data.TranscriptLine
 import com.secondmemory.android.data.UsageInfo
 import org.json.JSONArray
 import org.json.JSONObject
@@ -118,19 +119,26 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         val json = request("GET", "api/v1/memory/sessions/$sessionId/detail")
         val memoriesJson = json.getJSONArray("memories")
         val chunks = json.getJSONArray("transcriptChunks")
-        val transcript = buildString {
-            repeat(chunks.length()) { index ->
-                val chunk = chunks.getJSONObject(index)
-                if (isNotEmpty()) append("\n\n")
-                chunk.optString("speakerLabel").takeIf { it.isNotBlank() }?.let { append(it).append(": ") }
-                append(chunk.optString("text"))
-            }
+        val lines = List(chunks.length()) { index ->
+            val chunk = chunks.getJSONObject(index)
+            TranscriptLine(
+                speaker = if (chunk.isNull("speakerLabel")) null else chunk.optString("speakerLabel").takeIf { it.isNotBlank() },
+                text = chunk.optString("text")
+            )
         }
+        val transcript = lines.joinToString("\n\n") { line -> line.speaker?.let { "$it: ${line.text}" } ?: line.text }
         return ConversationDetail(
             session = sessionFromJson(json.getJSONObject("session")),
             memories = List(memoriesJson.length()) { ResultJson.memoryFromJson(memoriesJson.getJSONObject(it)) },
-            transcript = transcript
+            transcript = transcript,
+            transcriptLines = lines
         )
+    }
+
+    /** Tells the server which transcript speaker is the person using the app. */
+    fun setSelfSpeaker(sessionId: String, speaker: String): ConversationSession {
+        val body = JSONObject().put("selfSpeaker", speaker)
+        return sessionFromJson(request("PATCH", "api/v1/memory/sessions/$sessionId", body))
     }
 
     fun renameSession(sessionId: String, title: String): ConversationSession {
@@ -144,7 +152,7 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
 
     /** Open commitments, soonest due first. */
     fun openMemories(overdueOnly: Boolean): List<MemoryItem> =
-        memoriesFrom(requestArray("api/v1/memory/memories/open?overdue=$overdueOnly&limit=100"))
+        memoriesFrom(requestArray("api/v1/memory/memories/open?overdue=$overdueOnly&limit=200"))
 
     fun searchMemories(query: String): List<MemoryItem> {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
@@ -165,9 +173,13 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         status: String? = null,
         active: Boolean? = null,
         dueAt: String? = null,
-        clearDueAt: Boolean = false
+        clearDueAt: Boolean = false,
+        title: String? = null,
+        content: String? = null
     ): MemoryItem {
         val body = JSONObject().apply {
+            title?.let { put("title", it) }
+            content?.let { put("content", it) }
             status?.let { put("resolutionStatus", it) }
             active?.let { put("active", it) }
             dueAt?.let { put("dueAt", it) }
@@ -189,7 +201,8 @@ class BackendClient(baseUrl: String, private val token: String? = null) {
         durationSeconds = if (json.isNull("durationSeconds")) null else json.optInt("durationSeconds"),
         summary = if (json.isNull("summary")) null else json.optString("summary").takeIf { it.isNotBlank() },
         errorMessage = if (json.isNull("errorMessage")) null else json.optString("errorMessage").takeIf { it.isNotBlank() },
-        updatedAt = if (json.isNull("updatedAt")) null else json.optString("updatedAt").takeIf { it.isNotBlank() }
+        updatedAt = if (json.isNull("updatedAt")) null else json.optString("updatedAt").takeIf { it.isNotBlank() },
+        selfSpeaker = if (json.isNull("selfSpeaker")) null else json.optString("selfSpeaker").takeIf { it.isNotBlank() }
     )
 
     private fun request(method: String, path: String, body: JSONObject? = null): JSONObject {

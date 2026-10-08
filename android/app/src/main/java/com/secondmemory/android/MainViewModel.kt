@@ -10,6 +10,8 @@ import com.secondmemory.android.data.AppSettings
 import com.secondmemory.android.data.HistoryUiState
 import com.secondmemory.android.data.MemoriesUiState
 import com.secondmemory.android.data.MemoryItem
+import com.secondmemory.android.data.NotificationSettings
+import com.secondmemory.android.data.TaskFilter
 import com.secondmemory.android.data.ThemeMode
 import com.secondmemory.android.data.UsageInfo
 import com.secondmemory.android.network.AuthException
@@ -17,6 +19,10 @@ import com.secondmemory.android.network.BackendClient
 import com.secondmemory.android.network.ConflictException
 import com.secondmemory.android.network.LoginResult
 import com.secondmemory.android.recording.MemoryRecordingService
+import com.secondmemory.android.reminders.DigestAlarm
+import com.secondmemory.android.reminders.ReminderAlarms
+import com.secondmemory.android.reminders.ReminderPlanner
+import com.secondmemory.android.reminders.ReminderSync
 import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.state.MemoryState
 import com.secondmemory.android.state.MemoryUiState
@@ -37,6 +43,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
@@ -66,6 +73,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableAccountDeletion = MutableStateFlow(AccountDeletionState())
     val accountDeletion: StateFlow<AccountDeletionState> = mutableAccountDeletion.asStateFlow()
 
+    private val mutableNotificationSettings = MutableStateFlow(readNotificationSettings())
+    val notificationSettings: StateFlow<NotificationSettings> = mutableNotificationSettings.asStateFlow()
+    /** A tab another part of the app asked to show (e.g. a notification opening Tasks). */
+    private val mutableRequestedPage = MutableStateFlow<String?>(null)
+    val requestedPage: StateFlow<String?> = mutableRequestedPage.asStateFlow()
+
     private val mutableUsage = MutableStateFlow<UsageInfo?>(null)
     val usage: StateFlow<UsageInfo?> = mutableUsage.asStateFlow()
 
@@ -82,13 +95,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // retryable across app restarts as long as its audio file still exists.
         val pending = AppSettings.pendingAudio(application)?.takeIf { File(it).exists() }
         MemoryState.restore(AppSettings.lastResult(application), pending, str(R.string.pending_recording_message))
-        if (mutableAuth.value) refreshUsage()
-        // A finished recording has used minutes, so refresh what's left.
+        if (mutableAuth.value) {
+            refreshUsage()
+            ReminderSync.start(application)
+        }
+        // A finished recording has used minutes and may bring new tasks: refresh both.
         viewModelScope.launch {
             MemoryState.state.map { it.mode }.distinctUntilChanged().collect { mode ->
-                if (mode == MemoryMode.READY && mutableAuth.value) refreshUsage()
+                if (mode == MemoryMode.READY && mutableAuth.value) {
+                    refreshUsage()
+                    loadDueSoon()
+                    ReminderSync.requestSync(application)
+                }
             }
         }
+    }
+
+    private fun readNotificationSettings(): NotificationSettings {
+        val app = getApplication<Application>()
+        return NotificationSettings(
+            remindersEnabled = AppSettings.remindersEnabled(app),
+            digestEnabled = AppSettings.digestEnabled(app),
+            digestMinuteOfDay = AppSettings.digestMinuteOfDay(app),
+            cardDismissed = AppSettings.notificationCardDismissed(app)
+        )
+    }
+
+    fun requestPage(page: String) {
+        mutableRequestedPage.value = page
+    }
+
+    fun consumePageRequest() {
+        mutableRequestedPage.value = null
+    }
+
+    // ---- Notifications -----------------------------------------------------------------------
+
+    fun setRemindersEnabled(enabled: Boolean) {
+        val app = getApplication<Application>()
+        AppSettings.setRemindersEnabled(app, enabled)
+        mutableNotificationSettings.value = readNotificationSettings()
+        if (enabled) ReminderSync.requestSync(app) else ReminderAlarms.cancelAll(app)
+    }
+
+    fun setDigestEnabled(enabled: Boolean) {
+        val app = getApplication<Application>()
+        AppSettings.setDigestEnabled(app, enabled)
+        mutableNotificationSettings.value = readNotificationSettings()
+        DigestAlarm.schedule(app) // cancels it when turned off
+    }
+
+    fun setDigestTime(minuteOfDay: Int) {
+        val app = getApplication<Application>()
+        AppSettings.setDigestMinuteOfDay(app, minuteOfDay)
+        mutableNotificationSettings.value = readNotificationSettings()
+        DigestAlarm.schedule(app)
+    }
+
+    fun dismissNotificationCard() {
+        AppSettings.dismissNotificationCard(getApplication())
+        mutableNotificationSettings.value = readNotificationSettings()
+    }
+
+    /** The notification permission was just granted: set up reminders right away. */
+    fun onNotificationsAllowed() {
+        val app = getApplication<Application>()
+        ReminderSync.requestSync(app)
+        DigestAlarm.schedule(app)
     }
 
     private fun str(@StringRes id: Int, vararg args: Any): String = getApplication<Application>().getString(id, *args)
@@ -122,6 +195,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Late failures from work started before signing out (e.g. a delayed delete) are not news.
         if (!mutableAuth.value) return
         AppSettings.clearSession(getApplication())
+        ReminderSync.stop(getApplication())
         resetSignedInState()
         mutableLoginError.value = str(R.string.error_session_expired)
         mutableAuth.value = false
@@ -142,6 +216,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Signs out and removes everything this person left on the phone, recordings included. */
     private fun signOutAndWipe(notice: String? = null) {
         val app = getApplication<Application>()
+        ReminderSync.stop(app)
         AppSettings.clearUserData(app)
         resetSignedInState()
         MemoryState.reset()
@@ -188,6 +263,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mutableAuth.value = true
                 mutableLoggingIn.value = false
                 refreshUsage()
+                ReminderSync.start(app)
             }.onFailure { error ->
                 mutableLoggingIn.value = false
                 mutableLoginError.value = error.message ?: str(R.string.error_sign_in)
@@ -351,6 +427,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Records which speaker the user is in the open conversation; their tasks then show as "You". */
+    fun setSelfSpeaker(speaker: String) {
+        val detail = mutableHistory.value.selected ?: return
+        mutateHistory {
+            client().setSelfSpeaker(detail.session.id, speaker)
+            val refreshed = client().sessionDetail(detail.session.id)
+            mutableHistory.update { state ->
+                state.copy(
+                    selected = refreshed,
+                    sessions = state.sessions.map { if (it.id == refreshed.session.id) refreshed.session else it }
+                )
+            }
+            // Ownership changed, so the Tasks filters and Home card may change too.
+            loadCommitments()
+            loadDueSoon()
+        }
+    }
+
     /** Re-runs server-side processing for a failed or stuck conversation and follows it to the end. */
     fun retrySession(sessionId: String) {
         mutableHistory.update { it.copy(mutating = true, error = null) }
@@ -426,23 +520,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---- Tasks and memories ------------------------------------------------------------------
 
     fun loadCommitments() {
-        val overdue = mutableMemories.value.overdueOnly
+        val filter = mutableMemories.value.taskFilter
         mutableMemories.update { it.copy(commitmentsLoading = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { client().openMemories(overdue) }
+            runCatching { client().openMemories(overdueOnly = filter == TaskFilter.OVERDUE) }
+                .map { items -> if (filter == TaskFilter.WAITING) items.filter { it.owner != null && !it.ownerIsSelf } else items }
                 .onSuccess { items ->
                     mutableMemories.update {
-                        if (it.overdueOnly == overdue) it.copy(commitmentsLoading = false, commitments = items) else it
+                        if (it.taskFilter == filter) it.copy(commitmentsLoading = false, commitments = items) else it
                     }
                 }
                 .onFailure { error -> memoriesFailure(error, R.string.error_load_tasks) }
         }
     }
 
-    fun setOverdueOnly(value: Boolean) {
-        mutableMemories.update { it.copy(overdueOnly = value) }
+    fun setTaskFilter(filter: TaskFilter) {
+        mutableMemories.update { it.copy(taskFilter = filter) }
         loadCommitments()
     }
+
+    /** Open items due today or overdue, for the Home card. Failures keep what was shown. */
+    fun loadDueSoon() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { client().openMemories(overdueOnly = false) }.onSuccess { items ->
+                val digest = ReminderPlanner.digest(items, Instant.now(), ZoneId.systemDefault())
+                mutableMemories.update { it.copy(dueSoon = digest.all) }
+            }
+        }
+    }
+
+    /** Saves new wording for a memory; Undo puts the old wording back. */
+    fun editMemory(memoryId: String, title: String, content: String) {
+        val previous = findMemory(memoryId) ?: return
+        if (title.isBlank() || content.isBlank()) return
+        memoryOperation(
+            memoryId,
+            onSuccess = {
+                notify(UserMessage(str(R.string.memory_updated), onUndo = { restoreText(memoryId, previous.title, previous.content) }))
+            }
+        ) { updateMemory(memoryId, title = title.trim(), content = content.trim()) }
+    }
+
+    private fun restoreText(memoryId: String, title: String, content: String) =
+        memoryOperation(memoryId) { updateMemory(memoryId, title = title, content = content) }
 
     /** Marks the memory done at once (it leaves Tasks immediately); the server change follows. */
     fun completeMemory(memoryId: String) {
@@ -468,7 +588,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Signed out during the undo window: the token is gone, so leave the memory as it is.
         if (!mutableAuth.value) return
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { client().deleteMemory(memoryId) }.onFailure { error ->
+            runCatching { client().deleteMemory(memoryId) }.onSuccess {
+                ReminderSync.requestSync(getApplication())
+            }.onFailure { error ->
                 if (error is AuthException) return@onFailure handleAuthFailure()
                 notify(UserMessage(error.message ?: str(R.string.error_delete_memory)))
                 reloadMemoryLists()
@@ -509,6 +631,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val memories = mutableMemories.value
         return memories.commitments.firstOrNull { it.id == memoryId }
             ?: memories.searchResults?.firstOrNull { it.id == memoryId }
+            ?: memories.dueSoon.firstOrNull { it.id == memoryId }
             ?: mutableHistory.value.selected?.memories?.firstOrNull { it.id == memoryId }
     }
 
@@ -532,6 +655,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { updated ->
                     applyMemoryChange(memoryId, updated)
                     if (reloadCommitments) loadCommitments()
+                    loadDueSoon()
+                    ReminderSync.requestSync(getApplication())
                     onSuccess()
                 }
                 .onFailure { error ->
@@ -553,6 +678,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 searchResults = state.searchResults?.mapNotNull { memory ->
                     if (memory.id != memoryId) memory else updated
+                },
+                dueSoon = state.dueSoon.mapNotNull { memory ->
+                    if (memory.id != memoryId) memory else updated?.takeIf { it.resolutionStatus == "OPEN" }
                 }
             )
         }

@@ -201,6 +201,7 @@
     <string name="privacy_point_transcribe">The audio is sent to Google Gemini to create the transcript. It\'s deleted from the server once the transcript is ready, and from this phone once processing succeeds.</string>
     <string name="privacy_point_storage">Transcripts, summaries and memories are stored on the MindCue server until you delete the conversation or your account.</string>
     <string name="privacy_point_ask">Ask Memory sends your question and your most relevant memories to Google Gemini to write the answer.</string>
+    <string name="privacy_point_backups">The server keeps encrypted backups of your conversations and memories for up to 35 days, so anything you delete is gone from them within that time.</string>
     <string name="privacy_point_delete">You can delete your account at any time from Settings.</string>
     <string name="version_label">Version</string>
     <string name="version_value">%1$s (%2$d)</string>
@@ -243,4 +244,56 @@
     <string name="error_microphone">Could not activate the microphone: %s</string>
     <string name="error_processing_failed">Processing failed</string>
     <string name="error_processing_slow">Processing is taking longer than expected. Check back in the app shortly.</string>
+
+    <!-- Reminders and morning summary -->
+    <string name="channel_reminders_name">Task reminders</string>
+    <string name="channel_reminders_description">When a task or promise is due</string>
+    <string name="channel_digest_name">Morning summary</string>
+    <string name="channel_digest_description">What is due today, once a day</string>
+    <string name="reminder_due_now">Due now</string>
+    <string name="notification_action_done">Done</string>
+    <string name="notification_action_tomorrow">Tomorrow</string>
+    <plurals name="digest_due_today">
+        <item quantity="one">%d due today</item>
+        <item quantity="other">%d due today</item>
+    </plurals>
+    <plurals name="digest_overdue">
+        <item quantity="one">%d overdue</item>
+        <item quantity="other">%d overdue</item>
+    </plurals>
+    <string name="notification_card_title">Get a reminder when tasks are due</string>
+    <string name="notification_card_text">MindCue can tell you when something is due, plus a short summary each morning.</string>
+    <string name="action_turn_on">Turn on</string>
+    <string name="notifications">Notifications</string>
+    <string name="reminders_title">Task reminders</string>
+    <string name="reminders_summary">A notification when something is due</string>
+    <string name="digest_title">Morning summary</string>
+    <string name="digest_summary">Every day at %s, when something is due</string>
+    <string name="notifications_off_title">Notifications are off</string>
+    <string name="notifications_off_summary">Turn them on to get reminders</string>
+    <string name="dialog_digest_time_title">Morning summary time</string>
+
+    <!-- Due today on Home -->
+    <string name="due_today_title">Due today</string>
+    <string name="action_see_all">See all</string>
+    <plurals name="due_more">
+        <item quantity="one">+%d more</item>
+        <item quantity="other">+%d more</item>
+    </plurals>
+    <string name="action_mark_done_named">Mark done: %s</string>
+
+    <!-- Who said what -->
+    <string name="filter_waiting">Waiting on others</string>
+    <string name="tasks_empty_waiting">Nothing is waiting on other people.</string>
+    <string name="owner_you">You</string>
+    <string name="which_speaker_title">Which speaker is you?</string>
+    <string name="which_speaker_text">Your tasks and promises will be marked as yours.</string>
+    <string name="you_are_speaker">You are %s</string>
+    <string name="action_change">Change</string>
+
+    <!-- Editing a memory -->
+    <string name="action_edit">Edit</string>
+    <string name="dialog_edit_memory_title">Edit memory</string>
+    <string name="field_details">Details</string>
+    <string name="memory_updated">Memory updated</string>
 </resources>

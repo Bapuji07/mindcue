@@ -20,10 +20,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,15 +44,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.secondmemory.android.R
+import com.secondmemory.android.data.MemoryItem
 import com.secondmemory.android.data.UsageInfo
 import com.secondmemory.android.state.MemoryUiState
 import com.secondmemory.android.ui.components.InlineMessage
 import com.secondmemory.android.ui.components.SurfaceCard
+import com.secondmemory.android.ui.friendlyDue
+import com.secondmemory.android.ui.isOverdue
 import com.secondmemory.android.ui.resetDate
 import com.secondmemory.android.ui.theme.Accent
 import com.secondmemory.android.ui.theme.BrandGradient
@@ -63,11 +71,14 @@ internal fun HomeScreen(
     modifier: Modifier,
     state: MemoryUiState,
     usage: UsageInfo?,
+    dueSoon: List<MemoryItem>,
     permissionError: String?,
     onActivate: () -> Unit,
     onRetry: () -> Unit,
     onDiscard: () -> Unit,
-    onOpenLatest: () -> Unit
+    onOpenLatest: () -> Unit,
+    onTaskDone: (String) -> Unit,
+    onSeeAllTasks: () -> Unit
 ) {
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     if (confirmDiscard) {
@@ -132,6 +143,9 @@ internal fun HomeScreen(
                 }
             }
         }
+        if (dueSoon.isNotEmpty()) {
+            item { DueTodayCard(dueSoon, onTaskDone, onSeeAllTasks) }
+        }
         state.result?.let { result ->
             item {
                 SurfaceCard {
@@ -157,6 +171,51 @@ internal fun HomeScreen(
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+private const val DUE_TODAY_ROWS = 3
+
+/** Today's and overdue tasks, each with a quick "done"; the full list is on the Tasks tab. */
+@Composable
+private fun DueTodayCard(items: List<MemoryItem>, onDone: (String) -> Unit, onSeeAll: () -> Unit) {
+    SurfaceCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.TaskAlt, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.due_today_title), fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f).semantics { heading() }
+            )
+            TextButton(onClick = onSeeAll) { Text(stringResource(R.string.action_see_all)) }
+        }
+        items.take(DUE_TODAY_ROWS).forEach { memory ->
+            val id = memory.id ?: return@forEach
+            val overdue = isOverdue(memory)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { onDone(id) }) {
+                    Icon(
+                        Icons.Outlined.RadioButtonUnchecked, tint = Primary,
+                        contentDescription = stringResource(R.string.action_mark_done_named, memory.title)
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(memory.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (overdue) stringResource(R.string.memory_overdue)
+                        else stringResource(R.string.due_at, friendlyDue(memory.dueAt)),
+                        color = if (overdue) ErrorColor else Muted, style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+        if (items.size > DUE_TODAY_ROWS) {
+            val more = items.size - DUE_TODAY_ROWS
+            Text(
+                pluralStringResource(R.plurals.due_more, more, more), color = Muted,
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 48.dp)
+            )
+        }
     }
 }
 

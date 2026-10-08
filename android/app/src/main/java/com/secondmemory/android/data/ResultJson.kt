@@ -29,7 +29,9 @@ object ResultJson {
         importance = json.optNullableDouble("importance"),
         confidence = json.optNullableDouble("confidence"),
         id = json.optNullableString("id"),
-        sessionId = json.optNullableString("sessionId")
+        sessionId = json.optNullableString("sessionId"),
+        owner = json.optNullableString("owner"),
+        ownerIsSelf = json.optBoolean("ownerIsSelf", false)
     )
 
     private fun memoryToJson(memory: MemoryItem) = JSONObject().apply {
@@ -37,6 +39,7 @@ object ResultJson {
         put("resolutionStatus", memory.resolutionStatus); put("dueAt", memory.dueAt)
         put("importance", memory.importance); put("confidence", memory.confidence)
         put("id", memory.id); put("sessionId", memory.sessionId)
+        put("owner", memory.owner); put("ownerIsSelf", memory.ownerIsSelf)
     }
 
     private fun JSONObject.optNullableString(name: String): String? =

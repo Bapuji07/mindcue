@@ -65,9 +65,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.secondmemory.android.MainViewModel
 import com.secondmemory.android.R
+import com.secondmemory.android.reminders.Notifications
 import com.secondmemory.android.state.MemoryMode
 import com.secondmemory.android.ui.components.MemoryActions
 import com.secondmemory.android.ui.screens.DeleteConversationDialog
@@ -118,6 +121,8 @@ fun MindCueApp(vm: MainViewModel) {
     val usage by vm.usage.collectAsStateWithLifecycle()
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val accountDeletion by vm.accountDeletion.collectAsStateWithLifecycle()
+    val notificationSettings by vm.notificationSettings.collectAsStateWithLifecycle()
+    val requestedPage by vm.requestedPage.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = LocalActivity.current
     val haptics = LocalHapticFeedback.current
@@ -127,14 +132,49 @@ fun MindCueApp(vm: MainViewModel) {
     var renaming by rememberSaveable { mutableStateOf(false) }
     var confirmDeleteConversation by rememberSaveable { mutableStateOf(false) }
     val page = runCatching { AppPage.valueOf(pageName) }.getOrDefault(AppPage.HOME)
-    LaunchedEffect(page) { if (page == AppPage.HOME || page == AppPage.SETTINGS) vm.refreshUsage() }
+    LaunchedEffect(page) {
+        if (page == AppPage.HOME || page == AppPage.SETTINGS) vm.refreshUsage()
+        if (page == AppPage.HOME) vm.loadDueSoon()
+    }
+    // A notification asked for a tab (e.g. a reminder opening Tasks).
+    LaunchedEffect(requestedPage) {
+        requestedPage?.let { name ->
+            AppPage.entries.firstOrNull { it.name == name }?.let { pageName = it.name }
+            vm.consumePageRequest()
+        }
+    }
+
+    // Notifications can be switched off outside the app, so re-check whenever it comes back.
+    var notificationsAllowed by remember { mutableStateOf(Notifications.allowed(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { notificationsAllowed = Notifications.allowed(context) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notificationsAllowed = Notifications.allowed(context)
+        when {
+            granted -> vm.onNotificationsAllowed()
+            // Android no longer shows the prompt: the switch is in the app's system settings.
+            activity != null && Build.VERSION.SDK_INT >= 33 &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.POST_NOTIFICATIONS) ->
+                openNotificationSettings(context)
+        }
+    }
+    val enableNotifications = {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings(context) // allowed, but switched off in system settings
+        }
+    }
 
     val openConversation: (String) -> Unit = { sessionId ->
         vm.openConversation(sessionId)
         pageName = AppPage.MEMORIES.name
     }
     val memoryActions = remember(vm) {
-        MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory, openConversation)
+        MemoryActions(vm::completeMemory, vm::removeMemory, vm::rescheduleMemory, openConversation, vm::editMemory)
     }
 
     // Snackbar messages from the view model. A message's onTimeout also runs if the screen goes
@@ -314,21 +354,35 @@ fun MindCueApp(vm: MainViewModel) {
                     RecordingScreen(content, state, level = { level }) { vm.deactivate(context) }
                 }
                 page == AppPage.HOME -> HomeScreen(
-                    content, state, usage, permissionError, activate,
+                    content, state, usage, memories.dueSoon, permissionError, activate,
                     onRetry = { state.lastAudioPath?.let { vm.retry(context, it) } },
                     onDiscard = vm::discardRecording,
-                    onOpenLatest = { state.result?.sessionId?.let(openConversation) ?: run { pageName = AppPage.MEMORIES.name } }
+                    onOpenLatest = { state.result?.sessionId?.let(openConversation) ?: run { pageName = AppPage.MEMORIES.name } },
+                    onTaskDone = vm::completeMemory,
+                    onSeeAllTasks = { pageName = AppPage.TASKS.name }
                 )
-                page == AppPage.TASKS -> TasksScreen(content, memories, memoryActions, vm::loadCommitments, vm::setOverdueOnly)
+                page == AppPage.TASKS -> TasksScreen(
+                    content, memories, memoryActions,
+                    showNotificationCard = notificationSettings.remindersEnabled && !notificationsAllowed &&
+                        !notificationSettings.cardDismissed,
+                    onRefresh = vm::loadCommitments,
+                    onFilterChange = vm::setTaskFilter,
+                    onEnableNotifications = enableNotifications,
+                    onDismissNotificationCard = vm::dismissNotificationCard
+                )
                 page == AppPage.MEMORIES -> MemoriesScreen(
                     content, state, history, memories, memoryActions,
                     vm::ask, vm::loadHistory, vm::onSearchQueryChange, vm::clearSearch,
-                    vm::openConversation, vm::retrySession
+                    vm::openConversation, vm::retrySession, vm::setSelfSpeaker
                 )
                 else -> SettingsScreen(
-                    content, username, usage, themeMode, accountDeletion,
+                    content, username, usage, themeMode, accountDeletion, notificationSettings, notificationsAllowed,
                     hasPendingRecording = vm::hasPendingRecording,
                     onThemeChange = vm::setThemeMode,
+                    onRemindersChange = vm::setRemindersEnabled,
+                    onDigestChange = vm::setDigestEnabled,
+                    onDigestTimeChange = vm::setDigestTime,
+                    onEnableNotifications = enableNotifications,
                     onLogout = vm::logout,
                     onDeleteAccount = vm::deleteAccount,
                     onClearDeletionError = vm::clearAccountDeletionError
@@ -336,6 +390,12 @@ fun MindCueApp(vm: MainViewModel) {
             }
         }
     }
+}
+
+private fun openNotificationSettings(context: android.content.Context) {
+    context.startActivity(
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    )
 }
 
 @Composable

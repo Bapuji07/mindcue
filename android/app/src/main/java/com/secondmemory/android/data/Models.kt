@@ -9,7 +9,11 @@ data class MemoryItem(
     val importance: Double?,
     val confidence: Double?,
     val id: String? = null,
-    val sessionId: String? = null
+    val sessionId: String? = null,
+    /** Who must act on it or made the promise ("Speaker 2", a name); null if unclear. */
+    val owner: String? = null,
+    /** True when [owner] is the person using the app. */
+    val ownerIsSelf: Boolean = false
 )
 
 data class SessionResult(
@@ -35,14 +39,26 @@ data class ConversationSession(
     val durationSeconds: Int?,
     val summary: String?,
     val errorMessage: String? = null,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    /** Which transcript speaker is the person using the app, once known. */
+    val selfSpeaker: String? = null
 )
 
 data class ConversationDetail(
     val session: ConversationSession,
     val memories: List<MemoryItem>,
-    val transcript: String
-)
+    val transcript: String,
+    val transcriptLines: List<TranscriptLine> = emptyList()
+) {
+    /** Distinct speaker labels in the order they first speak. */
+    val speakers: List<String> get() = transcriptLines.mapNotNull { it.speaker }.distinct()
+}
+
+/** One speaker turn; [speaker] is null for transcripts recorded before speaker labels existed. */
+data class TranscriptLine(val speaker: String?, val text: String)
+
+/** The Tasks tab's filter. WAITING = open items someone else owns. */
+enum class TaskFilter { ALL, OVERDUE, WAITING }
 
 data class HistoryUiState(
     val loading: Boolean = false,
@@ -56,7 +72,9 @@ data class HistoryUiState(
 data class MemoriesUiState(
     val commitments: List<MemoryItem> = emptyList(),
     val commitmentsLoading: Boolean = false,
-    val overdueOnly: Boolean = false,
+    val taskFilter: TaskFilter = TaskFilter.ALL,
+    /** Open items due today or overdue, for the Home card (independent of the Tasks filter). */
+    val dueSoon: List<MemoryItem> = emptyList(),
     val searchQuery: String = "",
     val searchResults: List<MemoryItem>? = null,
     val searching: Boolean = false,
@@ -80,6 +98,16 @@ data class UsageInfo(
     /** Longest recording that can still be processed right now. */
     val recordableMinutes: Int get() = minOf(audioMinutesLeft, maxRecordingMinutes)
 }
+
+/** Reminder and morning-summary preferences (device settings, kept across sign-outs). */
+data class NotificationSettings(
+    val remindersEnabled: Boolean,
+    val digestEnabled: Boolean,
+    /** Morning summary time as minutes after midnight. */
+    val digestMinuteOfDay: Int,
+    /** The one-time "turn on notifications" card on Tasks was dismissed. */
+    val cardDismissed: Boolean
+)
 
 /** The app's light/dark choice; SYSTEM follows the phone setting. */
 enum class ThemeMode { SYSTEM, LIGHT, DARK }

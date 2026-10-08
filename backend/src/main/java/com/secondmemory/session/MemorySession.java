@@ -17,5 +17,7 @@ public record MemorySession(
         String summary,
         String errorMessage,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /* The speaker label in this conversation's transcript that is the person using the app. */
+        String selfSpeaker
 ) {}

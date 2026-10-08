@@ -34,7 +34,7 @@ class MemoryAnswerServiceTest {
         Instant now = Instant.now();
         MemoryRecord memory = new MemoryRecord(UUID.randomUUID(), userId, UUID.randomUUID(), MemoryType.TASK,
                 "Pay invoice", "Pay the invoice on Friday", new BigDecimal("0.5"), null, ResolutionStatus.OPEN,
-                null, null, "gemini", "m", "v1", true, now, now);
+                null, null, "gemini", "m", "v1", true, now, now, null, false);
         when(memories.list(userId, null, 500)).thenReturn(List.of(memory));
         when(aiProperties.chat()).thenReturn(mock(AiProperties.Chat.class));
         when(providers.chat(any())).thenReturn(chat);

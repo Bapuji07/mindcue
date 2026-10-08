@@ -59,6 +59,23 @@ public class MemorySessionService {
         return get(id, userId);
     }
 
+    /**
+     * Records which transcript speaker is the person using the app, and re-marks which of the
+     * conversation's memories are theirs. The label must be one of the transcript's speakers.
+     */
+    @Transactional
+    public MemorySession setSelfSpeaker(UUID id, UUID userId, String speaker) {
+        get(id, userId);
+        String label = speaker.trim();
+        boolean known = transcripts.findBySession(id).stream().anyMatch(chunk -> label.equals(chunk.speakerLabel()));
+        if (!known) {
+            throw new IllegalArgumentException("That speaker is not in this conversation");
+        }
+        repository.updateSelfSpeaker(id, label);
+        memories.updateOwnerIsSelf(id, userId, label);
+        return get(id, userId);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void delete(UUID id, UUID userId) throws IOException {
         MemorySession session = get(id, userId);

@@ -13,5 +13,8 @@ public record ExtractedMemory(
         String resolutionStatus,
         OffsetDateTime occurredAt,
         OffsetDateTime dueAt,
-        List<String> sourceChunkIds
+        /* Chunk numbers (or ids) of the transcript chunks that support the memory. */
+        List<String> sourceChunkIds,
+        /* Who must act on it or made the promise, as the transcript names them; null if unclear. */
+        String owner
 ) {}

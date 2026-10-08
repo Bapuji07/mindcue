@@ -126,6 +126,10 @@ public class MemorySessionRepository {
                 """, summary, status.name(), id);
     }
 
+    public void updateSelfSpeaker(UUID id, String selfSpeaker) {
+        jdbc.update("UPDATE memory_session SET self_speaker = ?, updated_at = NOW() WHERE id = ?", selfSpeaker, id);
+    }
+
     public void markFailed(UUID id, String errorMessage) {
         jdbc.update("""
                 UPDATE memory_session
@@ -149,7 +153,8 @@ public class MemorySessionRepository {
                 rs.getString("summary"),
                 rs.getString("error_message"),
                 instant(rs, "created_at"),
-                instant(rs, "updated_at")
+                instant(rs, "updated_at"),
+                rs.getString("self_speaker")
         );
     }
 

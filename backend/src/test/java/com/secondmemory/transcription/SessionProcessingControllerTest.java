@@ -43,7 +43,7 @@ class SessionProcessingControllerTest {
     private MemorySession session(String audioUri, Integer seconds) {
         Instant now = Instant.now();
         return new MemorySession(sessionId, userId, "t", SessionStatus.AUDIO_RECEIVED, "ANDROID", now, null, "UTC",
-                audioUri, seconds, null, null, now, now);
+                audioUri, seconds, null, null, now, now, null);
     }
 
     @Test

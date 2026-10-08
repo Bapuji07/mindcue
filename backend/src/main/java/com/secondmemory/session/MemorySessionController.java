@@ -59,10 +59,21 @@ public class MemorySessionController {
     }
 
     @PatchMapping("/{id}")
-    public MemorySession rename(@PathVariable UUID id,
-                                @Valid @RequestBody RenameSessionRequest request,
+    public MemorySession update(@PathVariable UUID id,
+                                @Valid @RequestBody UpdateSessionRequest request,
                                 Authentication auth) {
-        return sessions.rename(id, CurrentUser.id(auth), request.title());
+        UUID userId = CurrentUser.id(auth);
+        if (request.title() == null && request.selfSpeaker() == null) {
+            throw new IllegalArgumentException("Nothing to update: send a title and/or selfSpeaker");
+        }
+        if (request.title() != null) {
+            if (request.title().isBlank()) throw new IllegalArgumentException("Title must not be blank");
+            sessions.rename(id, userId, request.title());
+        }
+        if (request.selfSpeaker() != null) {
+            sessions.setSelfSpeaker(id, userId, request.selfSpeaker());
+        }
+        return sessions.get(id, userId);
     }
 
     @DeleteMapping("/{id}")

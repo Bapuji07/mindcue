@@ -65,6 +65,8 @@ public class MemoryAnswerService {
 
             context.append("MEMORY ").append(number++).append('\n')
                     .append("TYPE: ").append(memory.type()).append('\n')
+                    .append("OWNER: ").append(memory.ownerIsSelf() ? "the user (you)"
+                            : memory.owner() == null ? "unknown" : memory.owner()).append('\n')
                     .append("TITLE: ").append(memory.title()).append('\n')
                     .append("CONTENT: ").append(memory.content()).append('\n')
                     .append("OCCURRED_AT: ").append(memory.occurredAt()).append('\n')

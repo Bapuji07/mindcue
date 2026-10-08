@@ -11,18 +11,28 @@ import com.secondmemory.session.MemorySessionService;
 import com.secondmemory.session.SessionStatus;
 import com.secondmemory.transcript.TranscriptChunk;
 import com.secondmemory.transcript.TranscriptRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
 public class MemoryExtractionService {
-    private static final String PROMPT_VERSION = "memory-extraction-v1";
+    private static final Logger log = LoggerFactory.getLogger(MemoryExtractionService.class);
+    private static final String PROMPT_VERSION = "memory-extraction-v2";
+    private static final int MAX_OWNER_LENGTH = 120;
 
     private final AiProviderRegistry providers;
     private final AiProperties aiProperties;
@@ -52,6 +62,14 @@ public class MemoryExtractionService {
             throw new IllegalArgumentException("No transcript chunks exist for session " + sessionId);
         }
 
+        // With a single speaker (a voice memo, say) that speaker is almost always the person recording.
+        String selfSpeaker = session.selfSpeaker();
+        List<String> speakers = chunks.stream().map(TranscriptChunk::speakerLabel).filter(Objects::nonNull).distinct().toList();
+        if (selfSpeaker == null && speakers.size() == 1) {
+            selfSpeaker = speakers.get(0);
+            sessionRepository.updateSelfSpeaker(sessionId, selfSpeaker);
+        }
+
         ChatAiProvider provider = providers.chat(aiProperties.chat().provider());
         String systemPrompt = readPrompt();
         String userPrompt = buildUserPrompt(session, chunks);
@@ -63,43 +81,51 @@ public class MemoryExtractionService {
                 ExtractedMemoryResponse.class
         );
 
-        java.util.Set<UUID> validChunkIds = chunks.stream()
-                .map(TranscriptChunk::id)
-                .collect(java.util.stream.Collectors.toSet());
-
+        Map<String, UUID> chunkRefs = chunkReferences(chunks);
+        int skipped = 0;
         if (response.memories() != null) {
             for (ExtractedMemory extracted : response.memories()) {
-                persist(session, extracted, validChunkIds);
+                if (!persist(session, extracted, chunkRefs, selfSpeaker)) skipped++;
             }
+        }
+        if (skipped > 0) {
+            log.warn("Skipped {} extracted memories without usable content or sources in session {}", skipped, sessionId);
         }
 
         sessionRepository.updateSummary(sessionId, response.summary(), SessionStatus.COMPLETED);
         return response;
     }
 
-    private void persist(MemorySession session, ExtractedMemory extracted, java.util.Set<UUID> validChunkIds) {
-        if (extracted.type() == null || extracted.content() == null || extracted.content().isBlank()) {
-            throw new IllegalStateException("AI returned a memory without required type/content");
+    /** The model cites chunks by their number; their UUIDs are accepted too. */
+    static Map<String, UUID> chunkReferences(List<TranscriptChunk> chunks) {
+        Map<String, UUID> refs = new HashMap<>();
+        for (TranscriptChunk chunk : chunks) {
+            refs.put(Integer.toString(chunk.sequenceNo()), chunk.id());
+            refs.put(chunk.id().toString(), chunk.id());
         }
-        if (extracted.sourceChunkIds() == null || extracted.sourceChunkIds().isEmpty()) {
-            throw new IllegalStateException("AI returned a memory without transcript provenance");
-        }
+        return refs;
+    }
 
-        java.util.List<UUID> sourceIds = extracted.sourceChunkIds().stream().map(value -> {
-            try {
-                return UUID.fromString(value);
-            } catch (IllegalArgumentException ex) {
-                throw new IllegalStateException("AI returned an invalid transcript chunk id: " + value);
-            }
-        }).toList();
-        if (!validChunkIds.containsAll(sourceIds)) {
-            throw new IllegalStateException("AI returned transcript provenance outside the current session");
-        }
+    /**
+     * Saves one extracted memory. A memory the model got wrong (no content, or no source that exists
+     * in this conversation) is skipped rather than failing the whole conversation. Returns whether
+     * it was saved.
+     */
+    private boolean persist(MemorySession session, ExtractedMemory extracted, Map<String, UUID> chunkRefs, String selfSpeaker) {
+        if (extracted.content() == null || extracted.content().isBlank()) return false;
+        List<UUID> sourceIds = extracted.sourceChunkIds() == null ? List.of() : extracted.sourceChunkIds().stream()
+                .filter(Objects::nonNull)
+                .map(ref -> chunkRefs.get(ref.trim()))
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (sourceIds.isEmpty()) return false;
 
-        MemoryType type = MemoryType.valueOf(extracted.type().toUpperCase());
-        ResolutionStatus status = extracted.resolutionStatus() == null || extracted.resolutionStatus().isBlank()
-                ? defaultStatus(type)
-                : ResolutionStatus.valueOf(extracted.resolutionStatus().toUpperCase());
+        MemoryType type = parseType(extracted.type());
+        ResolutionStatus status = parseStatus(extracted.resolutionStatus(), type);
+        String owner = blankToNull(extracted.owner());
+        if (owner != null && owner.length() > MAX_OWNER_LENGTH) owner = owner.substring(0, MAX_OWNER_LENGTH);
+        boolean ownerIsSelf = owner != null && owner.equals(selfSpeaker);
 
         UUID memoryId = memories.insert(
                 session.userId(),
@@ -107,41 +133,66 @@ public class MemoryExtractionService {
                 type,
                 extracted.title() == null || extracted.title().isBlank() ? extracted.content().substring(0, Math.min(120, extracted.content().length())) : extracted.title(),
                 extracted.content(),
-                extracted.importance() == null ? new java.math.BigDecimal("0.50") : extracted.importance(),
-                extracted.confidence() == null ? new java.math.BigDecimal("0.70") : extracted.confidence(),
+                extracted.importance() == null ? new BigDecimal("0.50") : extracted.importance(),
+                extracted.confidence() == null ? new BigDecimal("0.70") : extracted.confidence(),
                 status,
                 toInstant(extracted.occurredAt()),
                 toInstant(extracted.dueAt()),
                 aiProperties.chat().provider(),
                 aiProperties.chat().model(),
-                PROMPT_VERSION
+                PROMPT_VERSION,
+                owner,
+                ownerIsSelf
         );
 
         for (UUID sourceId : sourceIds) {
             memories.linkSource(memoryId, sourceId);
         }
+        return true;
     }
 
-    private ResolutionStatus defaultStatus(MemoryType type) {
+    /** Unknown types become notes instead of failing the conversation. */
+    private static MemoryType parseType(String value) {
+        if (value == null) return MemoryType.NOTE;
+        try {
+            return MemoryType.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return MemoryType.NOTE;
+        }
+    }
+
+    private static ResolutionStatus parseStatus(String value, MemoryType type) {
+        if (value == null || value.isBlank()) return defaultStatus(type);
+        try {
+            return ResolutionStatus.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return defaultStatus(type);
+        }
+    }
+
+    private static ResolutionStatus defaultStatus(MemoryType type) {
         return switch (type) {
             case TASK, PROMISE, PROBLEM, QUESTION -> ResolutionStatus.OPEN;
             default -> ResolutionStatus.NONE;
         };
     }
 
-    private Instant toInstant(java.time.OffsetDateTime dateTime) {
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private Instant toInstant(OffsetDateTime dateTime) {
         return dateTime == null ? null : dateTime.toInstant();
     }
 
     private String buildUserPrompt(MemorySession session, List<TranscriptChunk> chunks) {
         StringBuilder transcript = new StringBuilder();
         for (TranscriptChunk chunk : chunks) {
-            transcript.append("CHUNK_ID: ").append(chunk.id()).append('\n');
-            transcript.append("SEQUENCE: ").append(chunk.sequenceNo()).append('\n');
+            transcript.append("CHUNK ").append(chunk.sequenceNo());
             if (chunk.speakerLabel() != null) {
-                transcript.append("SPEAKER: ").append(chunk.speakerLabel()).append('\n');
+                transcript.append(" | ").append(chunk.speakerLabel());
             }
-            transcript.append("TEXT: ").append(chunk.text()).append("\n\n");
+            transcript.append('\n').append(chunk.text()).append("\n\n");
         }
 
         return """
@@ -161,7 +212,8 @@ public class MemoryExtractionService {
                       "resolutionStatus": "NONE|OPEN|DONE|CANCELLED",
                       "occurredAt": null,
                       "dueAt": null,
-                      "sourceChunkIds": ["UUID"]
+                      "owner": null,
+                      "sourceChunkIds": [1]
                     }
                   ]
                 }
@@ -173,7 +225,7 @@ public class MemoryExtractionService {
 
     private String readPrompt() {
         try {
-            ClassPathResource resource = new ClassPathResource("prompts/memory-extraction-v1.txt");
+            ClassPathResource resource = new ClassPathResource("prompts/memory-extraction-v2.txt");
             return resource.getContentAsString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("Could not load memory extraction prompt", e);

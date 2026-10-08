@@ -30,21 +30,31 @@ public class MemoryRepository {
                        Instant dueAt,
                        String aiProvider,
                        String aiModel,
-                       String promptVersion) {
+                       String promptVersion,
+                       String owner,
+                       boolean ownerIsSelf) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO memory
                     (id, user_id, session_id, type, title, content, importance, confidence,
                      resolution_status, occurred_at, due_at, ai_provider, ai_model,
-                     extraction_version, prompt_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     extraction_version, prompt_version, owner, owner_is_self)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 id, userId, sessionId, type.name(), title, content,
                 importance, confidence, resolutionStatus.name(),
                 occurredAt == null ? null : Timestamp.from(occurredAt),
                 dueAt == null ? null : Timestamp.from(dueAt),
-                aiProvider, aiModel, "v1", promptVersion);
+                aiProvider, aiModel, "v1", promptVersion, owner, ownerIsSelf);
         return id;
+    }
+
+    /** Re-marks which of a conversation's memories belong to the user after they say which speaker they are. */
+    public void updateOwnerIsSelf(UUID sessionId, UUID userId, String selfSpeaker) {
+        jdbc.update("""
+                UPDATE memory SET owner_is_self = COALESCE(owner = ?, FALSE), updated_at = NOW()
+                WHERE session_id = ? AND user_id = ?
+                """, selfSpeaker, sessionId, userId);
     }
 
     public void linkSource(UUID memoryId, UUID chunkId) {
@@ -161,28 +171,8 @@ public class MemoryRepository {
                   AND embedding IS NOT NULL
                 ORDER BY embedding <=> CAST(? AS vector)
                 LIMIT ?
-                """, (rs, rowNum) -> new MemorySearchHit(
-                new MemoryRecord(
-                        rs.getObject("id", UUID.class),
-                        rs.getObject("user_id", UUID.class),
-                        rs.getObject("session_id", UUID.class),
-                        MemoryType.valueOf(rs.getString("type")),
-                        rs.getString("title"),
-                        rs.getString("content"),
-                        rs.getBigDecimal("importance"),
-                        rs.getBigDecimal("confidence"),
-                        ResolutionStatus.valueOf(rs.getString("resolution_status")),
-                        timestamp(rs.getTimestamp("occurred_at")),
-                        timestamp(rs.getTimestamp("due_at")),
-                        rs.getString("ai_provider"),
-                        rs.getString("ai_model"),
-                        rs.getString("prompt_version"),
-                        rs.getBoolean("is_active"),
-                        rs.getTimestamp("created_at").toInstant(),
-                        rs.getTimestamp("updated_at").toInstant()
-                ),
-                rs.getDouble("similarity")
-        ), vector, userId, vector, limit);
+                """, (rs, rowNum) -> new MemorySearchHit(mapRow(rs), rs.getDouble("similarity")),
+                vector, userId, vector, limit);
     }
 
     public List<MemorySourceEvidence> sourcesForMemory(UUID memoryId) {
@@ -234,7 +224,9 @@ public class MemoryRepository {
                 rs.getString("prompt_version"),
                 rs.getBoolean("is_active"),
                 rs.getTimestamp("created_at").toInstant(),
-                rs.getTimestamp("updated_at").toInstant()
+                rs.getTimestamp("updated_at").toInstant(),
+                rs.getString("owner"),
+                rs.getBoolean("owner_is_self")
         );
     }
 }

@@ -36,7 +36,7 @@ class SessionProcessingOrchestratorTest {
     private MemorySession session(SessionStatus status, String audioUri) {
         Instant now = Instant.now();
         return new MemorySession(sessionId, userId, "t", status, "ANDROID", now, null, "UTC",
-                audioUri, null, null, null, now, now);
+                audioUri, null, null, null, now, now, null);
     }
 
     @Test

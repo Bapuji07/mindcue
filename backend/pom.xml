@@ -75,7 +75,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
+            <!-- compile scope: the database backup uses the driver's COPY API -->
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>

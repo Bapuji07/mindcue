@@ -1,5 +1,7 @@
 package com.secondmemory.common;
 
+import com.secondmemory.backup.BackupStatus;
+import com.secondmemory.backup.DatabaseBackupService;
 import com.secondmemory.config.AiProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,10 +16,12 @@ import java.util.Map;
 public class HealthController {
     private final JdbcTemplate jdbc;
     private final AiProperties ai;
+    private final DatabaseBackupService backups;
 
-    public HealthController(JdbcTemplate jdbc, AiProperties ai) {
+    public HealthController(JdbcTemplate jdbc, AiProperties ai, DatabaseBackupService backups) {
         this.jdbc = jdbc;
         this.ai = ai;
+        this.backups = backups;
     }
 
     @GetMapping
@@ -33,6 +37,13 @@ public class HealthController {
         response.put("transcriptionModel", ai.transcription().model());
         response.put("transcriptionApiKeyConfigured", configured(ai.transcription().apiKey()));
         response.put("embeddingEnabled", ai.embedding().enabled());
+        // Lets anyone confirm the nightly backup without server access; failures are detailed only in the log.
+        BackupStatus backup = backups.status();
+        Map<String, Object> backupInfo = new LinkedHashMap<>();
+        backupInfo.put("status", backup.status());
+        backupInfo.put("lastSuccessAt", backup.lastSuccessAt());
+        backupInfo.put("lastAttemptAt", backup.lastAttemptAt());
+        response.put("backup", backupInfo);
         return response;
     }
 

@@ -37,6 +37,12 @@ memory:
       username: ${AUTH_BOOTSTRAP_USERNAME:}
       password: ${AUTH_BOOTSTRAP_PASSWORD:}
 
+  # Nightly database backup: S3 bucket above under the prefix (or the local directory for local storage).
+  backup:
+    enabled: ${MEMORY_BACKUP_ENABLED:true}
+    prefix: ${MEMORY_BACKUP_PREFIX:backups/}
+    local-directory: ${MEMORY_BACKUP_DIR:./data/backups}
+
   # Per-user limits protect the shared AI key. Calendar month / day boundaries are UTC.
   limits:
     monthly-audio-minutes: ${LIMIT_MONTHLY_AUDIO_MINUTES:120}
